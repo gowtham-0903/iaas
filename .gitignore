@@ -1,0 +1,58 @@
+# macOS
+.DS_Store
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment files (keep examples)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Python virtual environments
+venv/
+.venv/
+iaas-backend/venv/
+iaas-backend/.venv/
+
+# Flask / local instance files
+instance/
+*.sqlite3
+*.db
+
+# Node / frontend
+node_modules/
+iaas-frontend/node_modules/
+iaas-frontend/dist/
+
+# Build artifacts
+build/
+dist/
+
+# Runtime / temp
+tmp/
+temp/
+*.pid
+*.seed
