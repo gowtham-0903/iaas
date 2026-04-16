@@ -1,13 +1,17 @@
-import axiosInstance from './axiosInstance'
+import { getCurrentUser, login, logout, refreshSession } from './authApi'
 
 export function loginRequest(email, password) {
-  return axiosInstance.post('/api/auth/login', { email, password })
+  return login(email, password)
 }
 
 export function fetchCurrentUser() {
-  return axiosInstance.get('/api/auth/me')
+  return getCurrentUser()
 }
 
 export function logoutRequest() {
-  return axiosInstance.post('/api/auth/logout')
+  return logout()
+}
+
+export function refreshRequest() {
+  return refreshSession()
 }

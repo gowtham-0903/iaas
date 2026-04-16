@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
-import { logoutRequest } from '../api/auth'
+import { logout as logoutRequest } from '../api/authApi'
 import useAuthStore from '../store/authStore'
 
 const navigationSections = [
@@ -8,7 +8,7 @@ const navigationSections = [
     heading: 'Main',
     items: [
       { label: 'Dashboard', to: '/dashboard' },
-      { label: 'Clients', to: '/dashboard' },
+      { label: 'Clients', to: '/clients' },
       { label: 'Job Descriptions', to: '/jd' },
       { label: 'AI Skill Extraction', to: '/skill-extraction' },
       { label: 'Candidates', to: '/candidates' },
@@ -25,7 +25,7 @@ const navigationSections = [
     heading: 'Reports',
     items: [
       { label: 'Score Reports', to: '/report' },
-      { label: 'Users', to: '/dashboard' },
+      { label: 'Users', to: '/users' },
     ],
   },
 ]
@@ -53,10 +53,6 @@ export default function Sidebar({ logoSubtitle = 'Admin panel' }) {
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-logo">
-        <div className="logo-name">IAAS</div>
-        <div className="logo-sub">{logoSubtitle}</div>
-      </div>
       {navigationSections.map((section) => (
         <div key={section.heading}>
           <div className="nav-section">{section.heading}</div>

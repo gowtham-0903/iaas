@@ -10,15 +10,14 @@ export default function Login() {
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const navigate = useNavigate()
-  const token = useAuthStore((state) => state.token)
-  const setToken = useAuthStore((state) => state.setToken)
+  const user = useAuthStore((state) => state.user)
   const setUser = useAuthStore((state) => state.setUser)
 
   useEffect(() => {
-    if (token) {
+    if (user) {
       navigate('/dashboard', { replace: true })
     }
-  }, [navigate, token])
+  }, [navigate, user])
 
   async function handleSubmit(event) {
     event.preventDefault()
@@ -32,12 +31,10 @@ export default function Login() {
       setIsLoading(true)
       setError('')
       const response = await login(email, password)
-      setToken(response.data.access_token)
       setUser(response.data.user)
       navigate('/dashboard', { replace: true })
     } catch (loginError) {
-      const message =
-        loginError?.response?.data?.message || 'Unable to sign in. Check your credentials and try again.'
+      const message = loginError?.response?.data?.error || 'Unable to sign in. Check your credentials and try again.'
       setError(message)
     } finally {
       setIsLoading(false)

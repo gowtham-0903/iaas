@@ -11,13 +11,10 @@ export const roleRanks = {
 }
 
 const useAuthStore = create((set, get) => ({
-  token: null,
   user: null,
-  setToken: (token) => set({ token }),
   setUser: (user) => set({ user }),
   logout: () =>
     set({
-      token: null,
       user: null,
     }),
   hasRoleAccess: (allowedRoles = []) => {

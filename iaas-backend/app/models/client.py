@@ -14,6 +14,7 @@ class Client(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     users = db.relationship("User", back_populates="client", lazy=True)
+    candidates = db.relationship("Candidate", back_populates="client", lazy=True)
 
     def __repr__(self) -> str:
         return f"<Client {self.name}>"

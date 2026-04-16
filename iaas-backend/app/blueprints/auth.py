@@ -1,41 +1,83 @@
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, jsonify, request
 from flask_jwt_extended import (
     create_access_token,
+    create_refresh_token,
     get_jwt,
     get_jwt_identity,
     jwt_required,
+    set_access_cookies,
+    set_refresh_cookies,
+    unset_jwt_cookies,
 )
+from marshmallow import ValidationError
 
+from app.extensions import db, limiter
+from app.models.revoked_token import RevokedToken
 from app.models.user import User
+from app.schemas.auth_schema import login_schema
 from app.schemas.user_schema import user_schema
 
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
 
+def jwt_refresh_token_required(fn):
+    return jwt_required(refresh=True)(fn)
+
+
 @auth_bp.post("/login")
+@limiter.limit("5 per minute")
 def login():
     payload = request.get_json(silent=True) or {}
-    email = (payload.get("email") or "").strip().lower()
-    password = payload.get("password") or ""
 
-    if not email or not password:
-        return jsonify({"message": "email and password are required"}), 400
+    try:
+        validated_payload = login_schema.load(payload)
+    except ValidationError as err:
+        return jsonify({"errors": err.messages}), 400
+
+    email = validated_payload["email"].strip().lower()
+    password = validated_payload["password"]
 
     user = User.query.filter_by(email=email, is_active=True).first()
     if user is None or not user.check_password(password):
-        return jsonify({"message": "Invalid email or password"}), 401
+        return jsonify({"error": "Invalid credentials"}), 401
 
-    token = create_access_token(identity=str(user.id), additional_claims={"role": user.role})
-    return jsonify({"access_token": token, "user": user_schema.dump(user)}), 200
+    access_token = create_access_token(identity=str(user.id), additional_claims={"role": user.role})
+    refresh_token = create_refresh_token(identity=str(user.id), additional_claims={"role": user.role})
+
+    response = jsonify({"user": user_schema.dump(user)})
+    set_access_cookies(response, access_token)
+    set_refresh_cookies(response, refresh_token)
+    return response, 200
+
+
+@auth_bp.post("/refresh")
+@jwt_refresh_token_required
+def refresh():
+    user_id = get_jwt_identity()
+    user = User.query.get(int(user_id))
+    if user is None or not user.is_active:
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    access_token = create_access_token(identity=str(user.id), additional_claims={"role": user.role})
+    response = jsonify({"message": "Token refreshed"})
+    set_access_cookies(response, access_token)
+    return response, 200
 
 
 @auth_bp.post("/logout")
-@jwt_required()
+@jwt_required(verify_type=False)
 def logout():
     jti = get_jwt().get("jti")
-    current_app.config.setdefault("JWT_BLOCKLIST", set()).add(jti)
-    return jsonify({"message": "Logged out successfully"}), 200
+
+    existing_entry = RevokedToken.query.filter_by(jti=jti).first()
+    if existing_entry is None:
+        db.session.add(RevokedToken(jti=jti))
+        db.session.commit()
+
+    response = jsonify({"message": "Logged out successfully"})
+    unset_jwt_cookies(response)
+    return response, 200
 
 
 @auth_bp.get("/me")

@@ -3,7 +3,8 @@ from flask_cors import CORS
 
 from app.blueprints import register_blueprints
 from app.config import Config
-from app.extensions import db, jwt, migrate
+from app.extensions import db, jwt, limiter, migrate
+from app.models import Candidate, Client, JDSkill, JobDescription, RevokedToken, User  # noqa: F401
 
 
 def create_app(config_class=Config):
@@ -13,19 +14,23 @@ def create_app(config_class=Config):
     CORS(
         app,
         resources={r"/api/*": {"origins": "http://localhost:5173"}},
-        allow_headers=["Content-Type", "Authorization"],
+        allow_headers=["Content-Type", "Authorization", "X-CSRF-TOKEN"],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        supports_credentials=True,
     )
 
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
-
-    app.config.setdefault("JWT_BLOCKLIST", set())
+    limiter.init_app(app)
 
     @jwt.token_in_blocklist_loader
     def check_if_token_revoked(_jwt_header, jwt_payload):
-        return jwt_payload.get("jti") in app.config["JWT_BLOCKLIST"]
+        jti = jwt_payload.get("jti")
+        if not jti:
+            return False
+
+        return db.session.query(RevokedToken.id).filter_by(jti=jti).first() is not None
 
     @app.get("/health")
     def health():
