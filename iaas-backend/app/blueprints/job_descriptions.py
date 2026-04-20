@@ -1,7 +1,6 @@
 import os
 import time
 from datetime import datetime
-from datetime import datetime
 from typing import Optional
 
 from flask import Blueprint, jsonify, request, send_file
@@ -120,10 +119,6 @@ def create_jd():
     db.session.add(jd)
     db.session.commit()
 
-    jd.job_code = f"JD-{datetime.now().year}-{str(jd.id).zfill(4)}"
-    db.session.commit()
-
-    
     jd.job_code = f"JD-{datetime.now().year}-{str(jd.id).zfill(4)}"
     db.session.commit()
 

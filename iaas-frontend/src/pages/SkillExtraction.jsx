@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { jsPDF } from 'jspdf'
+import autoTable from 'jspdf-autotable'
+import * as XLSX from 'xlsx'
 
 import {
   addSkill,
@@ -54,6 +57,8 @@ export default function SkillExtraction() {
   const [isExtracting, setIsExtracting] = useState(false)
   const [savingRowId, setSavingRowId] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
+  const [isDownloadingExcel, setIsDownloadingExcel] = useState(false)
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false)
   const [selectedFile, setSelectedFile] = useState(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -372,6 +377,85 @@ export default function SkillExtraction() {
     }
   }
 
+  function getExportRows() {
+    return skillCards.map((card) => ({
+      type: card.skill_type || 'secondary',
+      skill_name: card.skill_name || '-',
+      importance: card.importance_level || '-',
+      subtopics: card.subtopics_text || '-',
+    }))
+  }
+
+  function getExportFileBaseName() {
+    const date = new Date().toISOString().slice(0, 10)
+    return `jd-${jdId || 'unknown'}-skills-${date}`
+  }
+
+  function handleDownloadExcel() {
+    const rows = getExportRows()
+    if (rows.length === 0) {
+      setError('No skills available to export.')
+      return
+    }
+
+    try {
+      setIsDownloadingExcel(true)
+      setError('')
+
+      const worksheet = XLSX.utils.json_to_sheet(
+        rows.map((row) => ({
+          Type: row.type,
+          'Skill Name': row.skill_name,
+          Importance: row.importance,
+          Subtopics: row.subtopics,
+        })),
+      )
+      const workbook = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Extracted Skills')
+      XLSX.writeFile(workbook, `${getExportFileBaseName()}.xlsx`)
+    } catch (_downloadError) {
+      setError('Failed to export Excel.')
+    } finally {
+      setIsDownloadingExcel(false)
+    }
+  }
+
+  function handleDownloadPdf() {
+    const rows = getExportRows()
+    if (rows.length === 0) {
+      setError('No skills available to export.')
+      return
+    }
+
+    try {
+      setIsDownloadingPdf(true)
+      setError('')
+
+      const doc = new jsPDF({ orientation: 'landscape' })
+      doc.setFontSize(12)
+      doc.text(`Extracted Skills - ${jd?.title || `JD #${jdId}`}`, 14, 14)
+
+      autoTable(doc, {
+        startY: 20,
+        head: [['Type', 'Skill Name', 'Importance', 'Subtopics']],
+        body: rows.map((row) => [row.type, row.skill_name, row.importance, row.subtopics]),
+        styles: {
+          fontSize: 9,
+          cellPadding: 2,
+        },
+        headStyles: {
+          fillColor: [24, 95, 165],
+        },
+      })
+
+      doc.save(`${getExportFileBaseName()}.pdf`)
+    } catch (_downloadError) {
+      setError('Failed to export PDF.')
+    } finally {
+      setIsDownloadingPdf(false)
+    }
+  }
+
   if (isLoading) {
     return (
       <AppShell>
@@ -426,9 +510,27 @@ export default function SkillExtraction() {
       <div className="card skill-panel-card">
         <div className="topbar skill-topbar">
           <div className="card-title skill-title-no-margin">Extracted Skills</div>
-          <button className="btn btn-primary" disabled={isExtracting} onClick={handleExtract} type="button">
-            {isExtracting ? 'Analysing JD with GPT-4o...' : 'Extract Skills'}
-          </button>
+          <div className="topbar-actions">
+            <button
+              className="btn"
+              disabled={isExtracting || isDownloadingExcel || skillCards.length === 0}
+              onClick={handleDownloadExcel}
+              type="button"
+            >
+              {isDownloadingExcel ? 'Downloading...' : 'Download Excel'}
+            </button>
+            <button
+              className="btn"
+              disabled={isExtracting || isDownloadingPdf || skillCards.length === 0}
+              onClick={handleDownloadPdf}
+              type="button"
+            >
+              {isDownloadingPdf ? 'Downloading...' : 'Download PDF'}
+            </button>
+            <button className="btn btn-primary" disabled={isExtracting} onClick={handleExtract} type="button">
+              {isExtracting ? 'Analysing JD with GPT-4o...' : 'Extract Skills'}
+            </button>
+          </div>
         </div>
 
         <div className="skill-panel-scroll">
