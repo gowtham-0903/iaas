@@ -7,14 +7,14 @@ class JDSkillSchema(BaseSchema):
     id = fields.Int(dump_only=True)
     jd_id = fields.Int(dump_only=True)
     skill_name = fields.Str(required=True)
-    skill_type = fields.Str(required=True, validate=validate.OneOf(["primary", "secondary"]))
+    skill_type = fields.Str(required=True, validate=validate.OneOf(["primary", "secondary", "soft"]))
     importance_level = fields.Str(allow_none=True)
     subtopics = fields.List(fields.Str(), allow_none=True)
 
 
 class JDSkillCreateSchema(BaseSchema):
     skill_name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
-    skill_type = fields.Str(required=True, validate=validate.OneOf(["primary", "secondary"]))
+    skill_type = fields.Str(required=True, validate=validate.OneOf(["primary", "secondary", "soft"]))
     importance_level = fields.Str(allow_none=True, validate=validate.Length(max=50))
     subtopics = fields.List(fields.Str(), allow_none=True)
 
@@ -29,6 +29,7 @@ class JDSchema(BaseSchema):
     id = fields.Int(dump_only=True)
     client_id = fields.Int(required=True)
     title = fields.Str(required=True, validate=validate.Length(min=1, max=255))
+    job_code = fields.Str(dump_only=True, allow_none=True)
     raw_text = fields.Str(load_default=None, allow_none=True)
     file_url = fields.Str(load_default=None, allow_none=True, validate=validate.Length(max=500))
     status = fields.Str(validate=validate.OneOf(["DRAFT", "ACTIVE", "CLOSED"]))

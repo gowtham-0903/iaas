@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import get_jwt, jwt_required
 from marshmallow import ValidationError
 
 from app.extensions import db
@@ -13,6 +13,10 @@ users_bp = Blueprint("users", __name__, url_prefix="/api/users")
 @users_bp.get("")
 @jwt_required()
 def list_users():
+    role = get_jwt().get("role")
+    if role != "ADMIN":
+        return jsonify({"message": "Forbidden"}), 403
+
     users = User.query.order_by(User.full_name.asc()).all()
     return jsonify({"users": users_schema.dump(users)}), 200
 
@@ -20,6 +24,10 @@ def list_users():
 @users_bp.post("")
 @jwt_required()
 def create_user():
+    role = get_jwt().get("role")
+    if role != "ADMIN":
+        return jsonify({"message": "Forbidden"}), 403
+
     payload = request.get_json(silent=True) or {}
 
     try:
@@ -50,6 +58,10 @@ def create_user():
 @users_bp.put("/<int:user_id>")
 @jwt_required()
 def update_user(user_id):
+    role = get_jwt().get("role")
+    if role != "ADMIN":
+        return jsonify({"message": "Forbidden"}), 403
+
     user = User.query.get(user_id)
     if user is None:
         return jsonify({"error": "User not found"}), 404
@@ -95,6 +107,10 @@ def update_user(user_id):
 @users_bp.delete("/<int:user_id>")
 @jwt_required()
 def delete_user(user_id):
+    role = get_jwt().get("role")
+    if role != "ADMIN":
+        return jsonify({"message": "Forbidden"}), 403
+
     user = User.query.get(user_id)
     if user is None:
         return jsonify({"error": "User not found"}), 404

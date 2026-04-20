@@ -42,6 +42,7 @@ function buildCard(skill) {
 
 function getSkillTypeClass(skillType) {
   if (skillType === 'primary') return 'skill-type-pill skill-type-pill-primary'
+  if (skillType === 'soft') return 'skill-type-pill skill-type-pill-soft'
   return 'skill-type-pill skill-type-pill-secondary'
 }
 

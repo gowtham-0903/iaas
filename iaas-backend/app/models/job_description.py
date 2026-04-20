@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.extensions import db
 
@@ -9,6 +9,7 @@ class JobDescription(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)
     title = db.Column(db.String(255), nullable=False)
+    job_code = db.Column(db.String(20), unique=True, nullable=True, index=True)
     raw_text = db.Column(db.Text, nullable=True)
     file_url = db.Column(db.String(500), nullable=True)
     status = db.Column(
@@ -17,7 +18,7 @@ class JobDescription(db.Model):
         default="DRAFT",
     )
     created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     client = db.relationship("Client", backref="job_descriptions", lazy=True)
     skills = db.relationship("JDSkill", back_populates="job_description", lazy=True, cascade="all, delete-orphan")

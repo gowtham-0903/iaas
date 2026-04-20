@@ -237,6 +237,7 @@ export default function JDManagement() {
             <thead>
               <tr>
                 <th>Title</th>
+                <th>Job Code</th>
                 <th>Client</th>
                 <th>Status</th>
                 <th>Created Date</th>
@@ -247,6 +248,7 @@ export default function JDManagement() {
               {jds.map((jd) => (
                 <tr key={jd.id}>
                   <td className="table-title-cell">{jd.title}</td>
+                  <td>{jd.job_code || '—'}</td>
                   <td>{clientMap.get(jd.client_id) || `Client #${jd.client_id}`}</td>
                   <td>
                     <div className="jd-status-cell">

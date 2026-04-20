@@ -20,6 +20,9 @@ def _build_user_prompt(jd_text: str) -> str:
         "  ],\n"
         '  "secondary_skills": [\n'
         '    { "skill_name": "Docker", "importance_level": "nice-to-have", "subtopics": [] }\n'
+        "  ],\n"
+        '  "soft_skills": [\n'
+        '    { "skill_name": "Leadership", "importance_level": "must-have", "subtopics": ["Team management", "Mentoring"] }\n'
         "  ]\n"
         "}\n"
         "Rules:\n"
@@ -27,6 +30,7 @@ def _build_user_prompt(jd_text: str) -> str:
         "- Do not invent skills that are not supported by the job description.\n"
         "- Prefer the most explicit and repeated skills from the text.\n"
         "- Keep output concise and deduplicated.\n"
+        "- Extract soft skills like Leadership, Communication, Mentoring, Teamwork, Problem Solving.\n"
         f"Job Description: {jd_text}"
     )
 
@@ -36,6 +40,7 @@ def _validate_result(payload):
         return False
     if "primary_skills" not in payload or "secondary_skills" not in payload:
         return False
+    # soft_skills is optional
     return True
 
 
@@ -56,10 +61,12 @@ def _normalize_result(payload):
     normalized = {
         "primary_skills": [normalize_item(item) for item in payload.get("primary_skills") or []],
         "secondary_skills": [normalize_item(item) for item in payload.get("secondary_skills") or []],
+        "soft_skills": [normalize_item(item) for item in payload.get("soft_skills") or []],
     }
 
     normalized["primary_skills"] = sorted(normalized["primary_skills"], key=lambda item: item["skill_name"].lower())
     normalized["secondary_skills"] = sorted(normalized["secondary_skills"], key=lambda item: item["skill_name"].lower())
+    normalized["soft_skills"] = sorted(normalized["soft_skills"], key=lambda item: item["skill_name"].lower())
     return normalized
 
 

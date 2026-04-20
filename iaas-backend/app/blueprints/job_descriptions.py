@@ -1,5 +1,7 @@
 import os
 import time
+from datetime import datetime
+from datetime import datetime
 from typing import Optional
 
 from flask import Blueprint, jsonify, request, send_file
@@ -116,6 +118,13 @@ def create_jd():
         created_by=current_user.id,
     )
     db.session.add(jd)
+    db.session.commit()
+
+    jd.job_code = f"JD-{datetime.now().year}-{str(jd.id).zfill(4)}"
+    db.session.commit()
+
+    
+    jd.job_code = f"JD-{datetime.now().year}-{str(jd.id).zfill(4)}"
     db.session.commit()
 
     return jsonify({"jd": jd_schema.dump(jd)}), 201
@@ -322,6 +331,7 @@ def extract_jd_skills(jd_id):
     saved_skills = []
     primary_skills = extracted.get("primary_skills") or []
     secondary_skills = extracted.get("secondary_skills") or []
+    soft_skills = extracted.get("soft_skills") or []
 
     for item in primary_skills:
         skill = JDSkill(
@@ -339,6 +349,17 @@ def extract_jd_skills(jd_id):
             jd_id=jd.id,
             skill_name=(item.get("skill_name") or "").strip(),
             skill_type="secondary",
+            importance_level=item.get("importance_level"),
+            subtopics=item.get("subtopics") or [],
+        )
+        db.session.add(skill)
+        saved_skills.append(skill)
+
+    for item in soft_skills:
+        skill = JDSkill(
+            jd_id=jd.id,
+            skill_name=(item.get("skill_name") or "").strip(),
+            skill_type="soft",
             importance_level=item.get("importance_level"),
             subtopics=item.get("subtopics") or [],
         )

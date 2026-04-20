@@ -5,7 +5,7 @@ import { login } from '../api/authApi'
 import useAuthStore from '../store/authStore'
 
 export default function Login() {
-  const [email, setEmail] = useState('admin@company.com')
+  const [email, setEmail] = useState('admin@meedenlabs.com')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)

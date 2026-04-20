@@ -7,7 +7,7 @@ class JDSkill(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     jd_id = db.Column(db.Integer, db.ForeignKey("job_descriptions.id"), nullable=False)
     skill_name = db.Column(db.String(255), nullable=False)
-    skill_type = db.Column(db.Enum("primary", "secondary", name="jd_skill_type_enum"), nullable=False)
+    skill_type = db.Column(db.Enum("primary", "secondary", "soft", name="jd_skill_type_enum"), nullable=False)
     importance_level = db.Column(db.String(50), nullable=True)
     subtopics = db.Column(db.JSON, nullable=True)
 
