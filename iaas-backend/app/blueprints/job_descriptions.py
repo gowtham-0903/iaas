@@ -8,7 +8,7 @@ from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 from marshmallow import ValidationError
 from werkzeug.utils import secure_filename
 
-from app.extensions import db
+from app.extensions import db, limiter
 from app.models.client import Client
 from app.models.jd_skill import JDSkill
 from app.models.job_description import JobDescription
@@ -297,6 +297,7 @@ def download_jd_file(jd_id):
 
 @jds_bp.post("/<int:jd_id>/extract-skills")
 @jwt_required()
+@limiter.limit("20 per hour")
 def extract_jd_skills(jd_id):
     role = get_jwt().get("role")
     if role not in ALLOWED_RECRUITER_AND_ABOVE:

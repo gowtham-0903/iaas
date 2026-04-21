@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import AppShell from '../components/AppShell'
 import MetricCard from '../components/MetricCard'
@@ -14,10 +15,18 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
 
+  const navigate = useNavigate()
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
+  const isAdmin = currentUser?.role === 'admin'
+
   useEffect(() => {
     let isMounted = true
 
     async function loadUsers() {
+      if (!isAdmin) {
+        setIsLoading(false)
+        return
+      }
       try {
         setIsLoading(true)
         setError('')
@@ -52,7 +61,9 @@ export default function Dashboard() {
     <AppShell>
       <div className="topbar">
         <h1>Dashboard</h1>
-        <button className="btn">+ New JD</button>
+        <button className="btn" onClick={() => navigate('/jds/new')}>
+          + New JD
+        </button>
       </div>
 
       <div className="metric-grid">

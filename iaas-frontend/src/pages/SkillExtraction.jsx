@@ -88,12 +88,6 @@ export default function SkillExtraction() {
           getSkills(jdId),
         ])
 
-        console.log('[SkillExtraction] Initial load', {
-          jdId,
-          jd: jdResponse.data?.jd,
-          rawTextLength: (jdResponse.data?.jd?.raw_text || '').length,
-          skillsCount: (skillsResponse.data?.skills || []).length,
-        })
 
         if (!isMounted) {
           return
@@ -158,29 +152,15 @@ export default function SkillExtraction() {
       setError('')
       setSuccess('')
 
-      console.log('[SkillExtraction] Extract request', {
-        jdId,
-        rawTextLength: (jd?.raw_text || '').length,
-      })
 
       await extractSkills(jdId)
       const skillsResponse = await getSkills(jdId)
       const refreshedSkills = skillsResponse.data?.skills ?? []
 
-      console.log('[SkillExtraction] Extract response', {
-        jdId,
-        skillsCount: refreshedSkills.length,
-        skills: refreshedSkills,
-      })
 
       setSkillCards(refreshedSkills.map(buildCard))
       setSuccess('Skills extracted successfully.')
     } catch (extractError) {
-      console.error('[SkillExtraction] Extract failed', {
-        jdId,
-        status: extractError?.response?.status,
-        data: extractError?.response?.data,
-      })
       setError('AI extraction failed — you can add skills manually')
     } finally {
       setIsExtracting(false)
@@ -203,26 +183,9 @@ export default function SkillExtraction() {
       setError('')
       setSuccess('')
 
-      console.log('[SkillExtraction] Upload request', {
-        jdId,
-        fileName: selectedFile.name,
-        fileSize: selectedFile.size,
-        fileType: selectedFile.type,
-      })
 
       const uploadResponse = await uploadJDFile(jdId, selectedFile)
-      console.log('[SkillExtraction] Upload response', {
-        jdId,
-        data: uploadResponse.data,
-      })
-
       const jdResponse = await getJD(jdId)
-      console.log('[SkillExtraction] JD after upload', {
-        jdId,
-        jd: jdResponse.data?.jd,
-        rawTextLength: (jdResponse.data?.jd?.raw_text || '').length,
-      })
-
       setJD(jdResponse.data?.jd ?? null)
 
       if ((jdResponse.data?.jd?.raw_text || '').trim().length === 0) {
@@ -233,11 +196,6 @@ export default function SkillExtraction() {
       setSuccess('JD file uploaded. You can now extract skills.')
       setSelectedFile(null)
     } catch (uploadError) {
-      console.error('[SkillExtraction] Upload failed', {
-        jdId,
-        status: uploadError?.response?.status,
-        data: uploadError?.response?.data,
-      })
       const apiError = uploadError?.response?.data
       if (apiError?.errors?.file) {
         setError(apiError.errors.file[0])

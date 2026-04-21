@@ -5,8 +5,9 @@ import { login } from '../api/authApi'
 import useAuthStore from '../store/authStore'
 
 export default function Login() {
-  const [email, setEmail] = useState('admin@meedenlabs.com')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const navigate = useNavigate()
@@ -42,8 +43,20 @@ export default function Login() {
   }
 
   return (
-    <div className="login-wrap">
-      <form className="login-card" onSubmit={handleSubmit}>
+    <div
+      className="login-wrap"
+      style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        minHeight: '100vh'
+      }}
+    >
+      <form
+        className="login-card"
+        style={{ width: '420px', padding: '32px' }}
+        onSubmit={handleSubmit}
+      >
         <div className="login-logo">
           <div className="name">IAAS</div>
           <div className="sub">Interview Assessment & Feedback System</div>
@@ -55,7 +68,7 @@ export default function Login() {
           <input
             id="email"
             type="email"
-            placeholder="admin@company.com"
+            placeholder="admin@meedenlabs.com"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />
@@ -66,22 +79,27 @@ export default function Login() {
           </label>
           <input
             id="password"
-            type="password"
+            type={showPassword ? 'text' : 'password'}
             placeholder="••••••••"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
           />
+          <div style={{ marginTop: '6px' }}>
+            <label style={{ fontSize: '12px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={showPassword}
+                onChange={() => setShowPassword((prev) => !prev)}
+                style={{ marginRight: '6px' }}
+              />
+              Show password
+            </label>
+          </div>
         </div>
         {error ? <div className="login-error">{error}</div> : null}
         <button className="btn btn-primary btn-block login-submit" type="submit" disabled={isLoading}>
           {isLoading ? 'Signing in...' : 'Sign in'}
         </button>
-        <p className="login-footer">
-          Role-based access — Admin · Recruiter · Panelist · QC · Client
-        </p>
-        <p className="login-preview-link">
-          <Link to="/dashboard">Open dashboard preview</Link>
-        </p>
       </form>
     </div>
   )

@@ -14,11 +14,15 @@ class Config:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
     ENV = os.getenv("FLASK_ENV", "development")
 
+    # CORS configuration (comma-separated origins)
+    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=15)
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=7)
 
     JWT_TOKEN_LOCATION = ["cookies"]
-    JWT_COOKIE_SECURE = False
+    # Read secure flag from env (defaults to False to preserve current behavior)
+    JWT_COOKIE_SECURE = os.getenv("JWT_COOKIE_SECURE", "False").lower() in ["true", "1", "yes"]
     JWT_COOKIE_SAMESITE = "Lax"
     JWT_COOKIE_CSRF_PROTECT = True
     JWT_ACCESS_CSRF_HEADER_NAME = "X-CSRF-TOKEN"
