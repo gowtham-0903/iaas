@@ -528,6 +528,7 @@ export default function SkillExtraction() {
                           >
                             <option value="primary">primary</option>
                             <option value="secondary">secondary</option>
+                            <option value="soft">soft</option>
                           </select>
                         ) : (
                           <span className={getSkillTypeClass(card.skill_type)}>{card.skill_type || 'secondary'}</span>

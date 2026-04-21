@@ -185,8 +185,9 @@ def _remove_unrelated_skills(result, jd_text):
 
 def extract_skills_from_text(jd_text: str) -> dict:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
-    normalized_jd_text = _normalize_jd_text(jd_text)
-    user_prompt = _build_user_prompt(normalized_jd_text)
+    # Send original text to GPT so it sees real formatting (CI/CD, not CI CD).
+    # Normalized text is only used internally for _remove_unrelated_skills matching.
+    user_prompt = _build_user_prompt(jd_text)
 
     delays = [1, 2, 4]
     for attempt, delay in enumerate(delays, start=1):

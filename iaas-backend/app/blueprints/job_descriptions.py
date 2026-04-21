@@ -38,6 +38,13 @@ ALLOWED_RECRUITER_AND_ABOVE = {
     UserRole.ADMIN.value,
 }
 
+# JD creation requires SR_RECRUITER or above (RECRUITER is view-only per ROLES_AND_ACCESS.md)
+JD_CREATE_ROLES = {
+    UserRole.SR_RECRUITER.value,
+    UserRole.M_RECRUITER.value,
+    UserRole.ADMIN.value,
+}
+
 
 def _get_current_user() -> Optional[User]:
     user_id = get_jwt_identity()
@@ -91,7 +98,7 @@ def _get_accessible_jd(jd_id):
 @jwt_required()
 def create_jd():
     role = get_jwt().get("role")
-    if role not in ALLOWED_RECRUITER_AND_ABOVE:
+    if role not in JD_CREATE_ROLES:
         return jsonify({"message": "Forbidden"}), 403
 
     payload = request.get_json(silent=True) or {}
@@ -243,6 +250,9 @@ def upload_jd_file(jd_id):
 
     if role == UserRole.RECRUITER.value and current_user.client_id != jd.client_id:
         return jsonify({"message": "Forbidden"}), 403
+
+    if jd.status == "CLOSED":
+        return jsonify({"error": "Cannot upload files to a closed JD"}), 409
 
     upload = request.files.get("file")
     if upload is None or not upload.filename:
