@@ -21,6 +21,11 @@ class JDSkillCreateSchema(BaseSchema):
 
 class JDSkillUpdateSchema(BaseSchema):
     skill_name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
+    skill_type = fields.Str(
+        validate=validate.OneOf(["primary", "secondary", "soft"]),
+        load_default=None,
+        allow_none=True
+    )
     importance_level = fields.Str(allow_none=True, validate=validate.Length(max=50))
     subtopics = fields.List(fields.Str(), allow_none=True)
 

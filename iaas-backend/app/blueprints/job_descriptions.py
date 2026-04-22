@@ -10,6 +10,7 @@ from werkzeug.utils import secure_filename
 
 from app.extensions import db, limiter
 from app.models.client import Client
+from app.models.jd_recruiter_assignment import JDRecruiterAssignment
 from app.models.jd_skill import JDSkill
 from app.models.job_description import JobDescription
 from app.models.user import User, UserRole
@@ -40,6 +41,7 @@ ALLOWED_RECRUITER_AND_ABOVE = {
 
 # JD creation requires SR_RECRUITER or above (RECRUITER is view-only per ROLES_AND_ACCESS.md)
 JD_CREATE_ROLES = {
+    UserRole.RECRUITER.value,
     UserRole.SR_RECRUITER.value,
     UserRole.M_RECRUITER.value,
     UserRole.ADMIN.value,
@@ -144,9 +146,20 @@ def list_jds():
     query = JobDescription.query
 
     if role == UserRole.RECRUITER.value:
-        if current_user.client_id is None:
-            return jsonify({"jds": []}), 200
-        query = query.filter(JobDescription.client_id == current_user.client_id)
+        # For recruiters: show only assigned JDs, fallback to all if no assignments exist
+        assigned_jds = JDRecruiterAssignment.query.filter_by(recruiter_id=current_user.id).with_entities(
+            JDRecruiterAssignment.jd_id
+        ).all()
+        assigned_jd_ids = [assignment.jd_id for assignment in assigned_jds]
+        
+        if assigned_jd_ids:
+            # Show only assigned JDs
+            query = query.filter(JobDescription.id.in_(assigned_jd_ids))
+        else:
+            # No assignments: fallback to show all JDs from recruiter's client
+            if current_user.client_id is None:
+                return jsonify({"jds": []}), 200
+            query = query.filter(JobDescription.client_id == current_user.client_id)
     elif role in {UserRole.ADMIN.value, UserRole.SR_RECRUITER.value, UserRole.M_RECRUITER.value, UserRole.QC.value}:
         pass
     else:
@@ -466,6 +479,8 @@ def update_jd_skill(jd_id, skill_id):
         return jsonify({"errors": err.messages}), 400
 
     skill.skill_name = validated_data["skill_name"].strip()
+    if validated_data.get("skill_type") is not None:
+        skill.skill_type = validated_data["skill_type"]
     skill.importance_level = validated_data.get("importance_level")
     skill.subtopics = validated_data.get("subtopics") or []
     db.session.commit()
@@ -500,3 +515,73 @@ def delete_jd_skill(jd_id, skill_id):
     db.session.delete(skill)
     db.session.commit()
     return jsonify({"message": "Skill deleted successfully"}), 200
+
+
+@jds_bp.post("/assign-recruiters")
+@jwt_required()
+def assign_recruiters():
+    role = get_jwt().get("role")
+    if role not in {UserRole.ADMIN.value, UserRole.SR_RECRUITER.value, UserRole.M_RECRUITER.value}:
+        return jsonify({"message": "Forbidden"}), 403
+
+    current_user = _get_current_user()
+    if current_user is None:
+        return jsonify({"message": "User not found"}), 404
+
+    payload = request.get_json(silent=True) or {}
+    jd_id = payload.get("jd_id")
+    recruiter_ids = payload.get("recruiter_ids", [])
+
+    if not isinstance(jd_id, int) or jd_id <= 0:
+        return jsonify({"errors": {"jd_id": ["jd_id must be a positive integer"]}}), 400
+
+    if not isinstance(recruiter_ids, list) or not recruiter_ids:
+        return jsonify({"errors": {"recruiter_ids": ["recruiter_ids must be a non-empty list"]}}), 400
+
+    jd = JobDescription.query.get(jd_id)
+    if jd is None:
+        return jsonify({"error": "JD not found"}), 404
+
+    # Validate all recruiter IDs exist and have RECRUITER role
+    recruiters = User.query.filter(User.id.in_(recruiter_ids)).all()
+    if len(recruiters) != len(recruiter_ids):
+        return jsonify({"error": "One or more recruiter IDs not found"}), 404
+
+    invalid_roles = [r.email for r in recruiters if r.role != UserRole.RECRUITER.value]
+    if invalid_roles:
+        return jsonify({"error": f"Users {invalid_roles} do not have RECRUITER role"}), 400
+
+    # Delete existing assignments for this JD
+    JDRecruiterAssignment.query.filter_by(jd_id=jd_id).delete()
+
+    # Create new assignments
+    assignments = []
+    for recruiter_id in recruiter_ids:
+        assignment = JDRecruiterAssignment(
+            jd_id=jd_id,
+            recruiter_id=recruiter_id,
+            assigned_by=current_user.id,
+        )
+        db.session.add(assignment)
+        assignments.append(assignment)
+
+    db.session.commit()
+
+    return (
+        jsonify(
+            {
+                "message": f"Assigned {len(assignments)} recruiter(s) to JD",
+                "assignments": [
+                    {
+                        "id": a.id,
+                        "jd_id": a.jd_id,
+                        "recruiter_id": a.recruiter_id,
+                        "assigned_by": a.assigned_by,
+                        "created_at": a.created_at.isoformat(),
+                    }
+                    for a in assignments
+                ],
+            }
+        ),
+        201,
+    )

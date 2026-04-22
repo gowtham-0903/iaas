@@ -12,6 +12,8 @@ class JobDescription(db.Model):
     job_code = db.Column(db.String(20), unique=True, nullable=True, index=True)
     raw_text = db.Column(db.Text, nullable=True)
     file_url = db.Column(db.String(500), nullable=True)
+    calibration_url = db.Column(db.String(500), nullable=True)
+    rate_scale = db.Column(db.String(255), nullable=True)
     status = db.Column(
         db.Enum("DRAFT", "ACTIVE", "CLOSED", name="jd_status_enum"),
         nullable=False,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -62,6 +62,7 @@ export default function SkillExtraction() {
   const [selectedFile, setSelectedFile] = useState(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const fileInputRef = useRef(null)
 
   const rawPreview = useMemo(() => {
     const raw = jd?.raw_text || ''
@@ -195,6 +196,9 @@ export default function SkillExtraction() {
 
       setSuccess('JD file uploaded. You can now extract skills.')
       setSelectedFile(null)
+      if (fileInputRef.current) {
+  fileInputRef.current.value = ''
+}
     } catch (uploadError) {
       const apiError = uploadError?.response?.data
       if (apiError?.errors?.file) {
@@ -446,11 +450,12 @@ export default function SkillExtraction() {
           <div className="form-group">
             <label className="form-label" htmlFor="jd-upload">Upload JD (.pdf/.docx)</label>
             <input
-              id="jd-upload"
-              type="file"
-              accept=".pdf,.docx"
-              onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
-            />
+              ref={fileInputRef}
+  id="jd-upload"
+  type="file"
+  accept=".pdf,.docx"
+  onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+/>
             <div className="topbar-actions" style={{ marginTop: '8px' }}>
               <button
                 className="btn"
@@ -485,7 +490,13 @@ export default function SkillExtraction() {
             >
               {isDownloadingPdf ? 'Downloading...' : 'Download PDF'}
             </button>
-            <button className="btn btn-primary" disabled={isExtracting} onClick={handleExtract} type="button">
+            <button
+              className="btn btn-primary"
+              disabled={isExtracting || !jd?.raw_text}
+              title={!jd?.raw_text ? 'Upload a JD file or paste text before extracting skills' : undefined}
+              onClick={handleExtract}
+              type="button"
+            >
               {isExtracting ? 'Analysing JD with GPT-4o...' : 'Extract Skills'}
             </button>
           </div>

@@ -3,6 +3,7 @@ from typing import Optional
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 from marshmallow import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
 from app.models.candidate import Candidate, CANDIDATE_STATUSES
@@ -119,7 +120,12 @@ def create_candidate():
         status=validated.get("status", "APPLIED"),
     )
     db.session.add(candidate)
-    db.session.commit()
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"error": "Candidate already exists for this JD"}), 409
 
     return jsonify({"candidate": candidate_schema.dump(candidate)}), 201
 

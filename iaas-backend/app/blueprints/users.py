@@ -1,9 +1,9 @@
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import get_jwt, jwt_required
+from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 from marshmallow import ValidationError
 
 from app.extensions import db
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.user_schema import create_user_schema, update_user_schema, user_schema, users_schema
 
 
@@ -25,8 +25,19 @@ def list_users():
 @jwt_required()
 def create_user():
     role = get_jwt().get("role")
-    if role != "ADMIN":
+    if role not in {
+        UserRole.ADMIN.value,
+        UserRole.M_RECRUITER.value,
+        UserRole.SR_RECRUITER.value,
+    }:
         return jsonify({"message": "Forbidden"}), 403
+
+    current_user = None
+    if role != UserRole.ADMIN.value:
+        user_id = get_jwt_identity()
+        current_user = User.query.get(int(user_id)) if user_id else None
+        if current_user is None:
+            return jsonify({"message": "User not found"}), 404
 
     payload = request.get_json(silent=True) or {}
 
@@ -34,6 +45,23 @@ def create_user():
         validated_data = create_user_schema.load(payload)
     except ValidationError as err:
         return jsonify({"errors": err.messages}), 400
+
+    target_role = validated_data.get("role")
+    target_client_id = validated_data.get("client_id")
+
+    # Role-based creation rules
+    if role == UserRole.M_RECRUITER.value:
+        # M_RECRUITER can create SR_RECRUITER or RECRUITER in their client
+        if target_role not in {UserRole.SR_RECRUITER.value, UserRole.RECRUITER.value}:
+            return jsonify({"message": "M_RECRUITER can only create SR_RECRUITER or RECRUITER"}), 403
+        if current_user.client_id is None or target_client_id != current_user.client_id:
+            return jsonify({"message": "Must create users in your own client"}), 403
+    elif role == UserRole.SR_RECRUITER.value:
+        # SR_RECRUITER can create RECRUITER in their client
+        if target_role != UserRole.RECRUITER.value:
+            return jsonify({"message": "SR_RECRUITER can only create RECRUITER"}), 403
+        if current_user.client_id is None or target_client_id != current_user.client_id:
+            return jsonify({"message": "Must create users in your own client"}), 403
 
     existing_user = User.query.filter_by(email=validated_data["email"].strip().lower()).first()
     if existing_user is not None:

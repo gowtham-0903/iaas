@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from app.extensions import db
+from sqlalchemy import UniqueConstraint
 
 
 CANDIDATE_STATUSES = [
@@ -14,6 +15,9 @@ CANDIDATE_STATUSES = [
 
 class Candidate(db.Model):
     __tablename__ = "candidates"
+    __table_args__ = (
+        UniqueConstraint('email', 'jd_id', name='uq_candidate_email_jd'),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)

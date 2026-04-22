@@ -59,3 +59,4 @@ temp/
 
 # Uploaded JD files
 iaas-backend/uploads/jd_files/
+/postman
