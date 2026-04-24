@@ -3,7 +3,7 @@ import axios from 'axios'
 import useAuthStore from '../store/authStore'
 
 const axiosInstance = axios.create({
-  baseURL: '/api',
+  baseURL: '/',
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
