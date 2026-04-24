@@ -115,12 +115,21 @@ The Interview Assessment System (IAAS) has 7 distinct user roles with hierarchic
 
 ---
 
+## User Creation Hierarchy & Client Mapping Rules
+
+- Roles **M_RECRUITER**, **SR_RECRUITER**, and **RECRUITER** must be created with a valid `client_id`.
+- `reports_to` is optional for recruiter-role users.
+- Flat structure is supported: recruiter-role users can be created without a manager assignment (`reports_to = null`).
+- Cross-client manager mapping is blocked: if `reports_to` is provided, the manager must belong to the same client.
+
+---
+
 ## Feature Access Table
 
 | Feature | ADMIN | M_RECRUITER | SR_RECRUITER | RECRUITER | PANELIST | QC | CLIENT |
 |---------|:-----:|:-----------:|:----:|:---------:|:--------:|:--:|:------:|
 | **User Management** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Create Users** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Create Users** | ✅ | ⚠️ Limited | ⚠️ Limited | ❌ | ❌ | ❌ | ❌ |
 | **System Settings** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Create JD** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Manage Candidates** | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ⚠️ Limited |

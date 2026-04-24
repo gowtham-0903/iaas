@@ -10,12 +10,61 @@ import {
 import { getCandidates } from '../api/candidatesApi'
 import { getJDs } from '../api/jdApi'
 import AppShell from '../components/AppShell'
+import {
+  AlertBanner, Avatar, Badge, Card, CardTitle, DangerBtn, DataTable,
+  EmptyState, FormField, FormInput, FormSelect, LoadingState,
+  ModalOverlay, PrimaryBtn, SecondaryBtn, TableCell, TableRow,
+} from '../components/ui'
 
 const DEFAULT_FORM = {
   name: '',
   industry: '',
   contact_email: '',
   is_active: true,
+}
+
+function ClientForm({
+  formData,
+  getErrorText,
+  handleChange,
+  isSubmitting,
+  onSubmit,
+  onCancel,
+  submitLabel,
+  submittingLabel,
+}) {
+  return (
+    <form onSubmit={onSubmit}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <FormField label="Client Name" htmlFor="client_name" error={getErrorText('name')}>
+          <FormInput id="client_name" name="name" type="text" value={formData.name} onChange={handleChange} required />
+        </FormField>
+        <FormField label="Industry" htmlFor="client_industry" error={getErrorText('industry')}>
+          <FormInput id="client_industry" name="industry" type="text" value={formData.industry} onChange={handleChange} required />
+        </FormField>
+      </div>
+      <FormField label="Contact Email" htmlFor="client_email" error={getErrorText('contact_email')}>
+        <FormInput id="client_email" name="contact_email" type="email" value={formData.contact_email} onChange={handleChange} required />
+      </FormField>
+      <div className="flex items-center gap-2 mb-4">
+        <input
+          id="client_is_active"
+          name="is_active"
+          type="checkbox"
+          checked={formData.is_active}
+          onChange={handleChange}
+          className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+        />
+        <label htmlFor="client_is_active" className="text-sm text-slate-700 font-medium cursor-pointer">Active client</label>
+      </div>
+      <div className="flex gap-2 pt-1">
+        <PrimaryBtn type="submit" loading={isSubmitting}>
+          {isSubmitting ? submittingLabel : submitLabel}
+        </PrimaryBtn>
+        <SecondaryBtn onClick={onCancel} disabled={isSubmitting}>Cancel</SecondaryBtn>
+      </div>
+    </form>
+  )
 }
 
 function enrichClientsWithMetrics(clients, jds, candidates) {
@@ -234,280 +283,146 @@ export default function Clients() {
   }
 
   return (
-    <AppShell>
-      <div className="topbar">
-        <h1>Clients</h1>
-        <div className="topbar-actions">
-          <button
-            className="btn btn-primary"
-            type="button"
-            onClick={() => {
-              setShowCreateForm((previous) => !previous)
-              setEditingClient(null)
-              setDeletingClientId(null)
-              setError('')
-              setSuccess('')
-              setFormErrors({})
-              setFormData(DEFAULT_FORM)
-            }}
-          >
-            {showCreateForm ? 'Close' : '+ Add Client'}
-          </button>
-        </div>
+    <AppShell pageTitle="Clients" pageSubtitle="Manage client accounts and their associated JDs">
+      {/* Topbar */}
+      <div className="flex items-center justify-between mb-5">
+        <div />
+        <PrimaryBtn
+          onClick={() => {
+            setShowCreateForm((previous) => !previous)
+            setEditingClient(null)
+            setDeletingClientId(null)
+            setError('')
+            setSuccess('')
+            setFormErrors({})
+            setFormData(DEFAULT_FORM)
+          }}
+        >
+          {showCreateForm ? 'Close' : '+ Add Client'}
+        </PrimaryBtn>
       </div>
 
-      {error ? <div className="login-error">{error}</div> : null}
-      {success ? <div className="card section-copy section-copy-left">{success}</div> : null}
+      <AlertBanner type="error" message={error} />
+      <AlertBanner type="success" message={success} />
 
-      {showCreateForm ? (
-        <div className="card">
-          <div className="card-title">Create Client</div>
-          <form onSubmit={handleCreateClient}>
-            <div className="form-group">
-              <label className="form-label" htmlFor="client_name">Client Name</label>
-              <input
-                id="client_name"
-                name="name"
-                type="text"
-                value={formData.name}
-                onChange={handleChange}
-                required
-              />
-              {getErrorText('name') ? <div className="section-copy section-copy-left">{getErrorText('name')}</div> : null}
-            </div>
+      {/* Create form */}
+      {showCreateForm && (
+        <Card>
+          <CardTitle>Create Client</CardTitle>
+          <ClientForm
+            formData={formData}
+            getErrorText={getErrorText}
+            handleChange={handleChange}
+            isSubmitting={isSubmitting}
+            onSubmit={handleCreateClient}
+            onCancel={resetForm}
+            submitLabel="Create Client"
+            submittingLabel="Creating..."
+          />
+        </Card>
+      )}
 
-            <div className="form-group">
-              <label className="form-label" htmlFor="client_industry">Industry</label>
-              <input
-                id="client_industry"
-                name="industry"
-                type="text"
-                value={formData.industry}
-                onChange={handleChange}
-                required
-              />
-              {getErrorText('industry') ? <div className="section-copy section-copy-left">{getErrorText('industry')}</div> : null}
-            </div>
+      {/* Edit form */}
+      {editingClient && (
+        <Card>
+          <CardTitle>Edit Client — {editingClient.name}</CardTitle>
+          <ClientForm
+            formData={formData}
+            getErrorText={getErrorText}
+            handleChange={handleChange}
+            isSubmitting={isSubmitting}
+            onSubmit={handleUpdateClient}
+            onCancel={resetForm}
+            submitLabel="Save Changes"
+            submittingLabel="Saving..."
+          />
+        </Card>
+      )}
 
-            <div className="form-group">
-              <label className="form-label" htmlFor="client_email">Contact Email</label>
-              <input
-                id="client_email"
-                name="contact_email"
-                type="email"
-                value={formData.contact_email}
-                onChange={handleChange}
-                required
-              />
-              {getErrorText('contact_email') ? <div className="section-copy section-copy-left">{getErrorText('contact_email')}</div> : null}
-            </div>
-
-            <div className="form-group">
-              <label className="form-label" htmlFor="client_is_active">
-                <input
-                  id="client_is_active"
-                  name="is_active"
-                  type="checkbox"
-                  checked={formData.is_active}
-                  onChange={handleChange}
-                />
-                {' '}
-                Active
-              </label>
-            </div>
-
-            <div className="topbar-actions">
-              <button className="btn btn-primary" type="submit" disabled={isSubmitting}>
-                {isSubmitting ? 'Creating...' : 'Create Client'}
-              </button>
-              <button
-                className="btn"
-                type="button"
-                onClick={resetForm}
-                disabled={isSubmitting}
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>
-      ) : null}
-
-      {editingClient ? (
-        <div className="card">
-          <div className="card-title">Edit Client</div>
-          <form onSubmit={handleUpdateClient}>
-            <div className="form-group">
-              <label className="form-label" htmlFor="edit_client_name">Client Name</label>
-              <input
-                id="edit_client_name"
-                name="name"
-                type="text"
-                value={formData.name}
-                onChange={handleChange}
-                required
-              />
-              {getErrorText('name') ? <div className="section-copy section-copy-left">{getErrorText('name')}</div> : null}
-            </div>
-
-            <div className="form-group">
-              <label className="form-label" htmlFor="edit_client_industry">Industry</label>
-              <input
-                id="edit_client_industry"
-                name="industry"
-                type="text"
-                value={formData.industry}
-                onChange={handleChange}
-                required
-              />
-              {getErrorText('industry') ? <div className="section-copy section-copy-left">{getErrorText('industry')}</div> : null}
-            </div>
-
-            <div className="form-group">
-              <label className="form-label" htmlFor="edit_client_email">Contact Email</label>
-              <input
-                id="edit_client_email"
-                name="contact_email"
-                type="email"
-                value={formData.contact_email}
-                onChange={handleChange}
-                required
-              />
-              {getErrorText('contact_email') ? <div className="section-copy section-copy-left">{getErrorText('contact_email')}</div> : null}
-            </div>
-
-            <div className="form-group">
-              <label className="form-label" htmlFor="edit_client_is_active">
-                <input
-                  id="edit_client_is_active"
-                  name="is_active"
-                  type="checkbox"
-                  checked={formData.is_active}
-                  onChange={handleChange}
-                />
-                {' '}
-                Active
-              </label>
-            </div>
-
-            <div className="topbar-actions">
-              <button className="btn btn-primary" type="submit" disabled={isSubmitting}>
-                {isSubmitting ? 'Saving...' : 'Save Changes'}
-              </button>
-              <button
-                className="btn"
-                type="button"
-                onClick={resetForm}
-                disabled={isSubmitting}
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>
-      ) : null}
-
-      {deletingClientId ? (
-        <div className="card">
-          <div className="card-title">Delete Client</div>
-          <p className="section-copy section-copy-left">
-            Deleting a client is blocked if it has linked JDs or candidates.
-          </p>
-          <div className="topbar-actions">
-            <button
-              className="btn btn-danger"
-              type="button"
-              onClick={() => handleDeleteClient(deletingClientId)}
-              disabled={isSubmitting}
-            >
+      {/* Delete confirmation */}
+      {deletingClientId && (
+        <Card>
+          <CardTitle>Delete Client</CardTitle>
+          <p className="text-sm text-slate-600 mb-4">Deleting a client is blocked if it has linked JDs or candidates.</p>
+          <div className="flex gap-2">
+            <DangerBtn onClick={() => handleDeleteClient(deletingClientId)} loading={isSubmitting}>
               {isSubmitting ? 'Deleting...' : 'Confirm Delete'}
-            </button>
-            <button
-              className="btn"
-              type="button"
-              onClick={() => setDeletingClientId(null)}
-              disabled={isSubmitting}
-            >
-              Cancel
-            </button>
+            </DangerBtn>
+            <SecondaryBtn onClick={() => setDeletingClientId(null)} disabled={isSubmitting}>Cancel</SecondaryBtn>
           </div>
-        </div>
-      ) : null}
+        </Card>
+      )}
 
-      <div className="card">
-        {isLoading ? (
-          <div className="loading-state">
-            <div className="loading-spinner" aria-label="Loading clients" />
-            <span>Loading clients...</span>
-          </div>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Client</th>
-                <th>Industry</th>
-                <th>Contact Email</th>
-                <th>Status</th>
-                <th>JDs</th>
-                <th>Candidates</th>
-                <th>Selected</th>
-                <th>Not Selected</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {clients.map((client) => (
-                <tr key={client.id}>
-                  <td className="table-title-cell">{client.name}</td>
-                  <td>{client.industry}</td>
-                  <td>{client.contact_email}</td>
-                  <td>
-                    <span className={client.is_active ? 'badge badge-green' : 'badge badge-gray'}>
-                      {client.is_active ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
-                  <td>{client.metrics?.jd_count ?? 0}</td>
-                  <td>{client.metrics?.candidate_count ?? 0}</td>
-                  <td>{client.metrics?.selected_count ?? 0}</td>
-                  <td>{client.metrics?.not_selected_count ?? 0}</td>
-                  <td>
-                    <div className="topbar-actions">
-                      <button className="btn table-action-btn" onClick={() => handleEditClick(client)} type="button">
-                        Edit
-                      </button>
-                      <button
-                        className="btn btn-danger table-action-btn"
-                        onClick={() => {
-                          setDeletingClientId(client.id)
-                          setShowCreateForm(false)
-                          setEditingClient(null)
-                        }}
-                        type="button"
-                      >
-                        Delete
-                      </button>
-                      <button
-                        className="btn table-action-btn"
-                        onClick={() => navigate('/jd')}
-                        type="button"
-                      >
-                        JDs
-                      </button>
-                      <button
-                        className="btn table-action-btn"
-                        onClick={() => navigate(`/candidates?clientId=${client.id}`)}
-                        type="button"
-                      >
-                        Candidates
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {/* Table */}
+      <Card>
+        <DataTable
+          headers={['Client', 'Industry', 'Contact Email', 'Status', 'JDs', 'Candidates', 'Selected', 'Not Selected', 'Actions']}
+          loading={isLoading}
+          loadingLabel="Loading clients..."
+        >
+          {clients.length === 0 && !isLoading ? (
+            <tr><td colSpan={9}><EmptyState message="No clients found" /></td></tr>
+          ) : (
+            clients.map((client) => (
+              <TableRow key={client.id}>
+                <TableCell>
+                  <div className="flex items-center gap-2.5">
+                    <Avatar name={client.name} />
+                    <span className="font-medium text-slate-900">{client.name}</span>
+                  </div>
+                </TableCell>
+                <TableCell>{client.industry}</TableCell>
+                <TableCell className="text-slate-500">{client.contact_email}</TableCell>
+                <TableCell>
+                  <Badge variant={client.is_active ? 'green' : 'gray'}>
+                    {client.is_active ? 'Active' : 'Inactive'}
+                  </Badge>
+                </TableCell>
+                <TableCell><span className="font-semibold text-slate-800">{client.metrics?.jd_count ?? 0}</span></TableCell>
+                <TableCell><span className="font-semibold text-slate-800">{client.metrics?.candidate_count ?? 0}</span></TableCell>
+                <TableCell><span className="font-semibold text-emerald-600">{client.metrics?.selected_count ?? 0}</span></TableCell>
+                <TableCell><span className="font-semibold text-red-500">{client.metrics?.not_selected_count ?? 0}</span></TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => handleEditClick(client)}
+                      className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeletingClientId(client.id)
+                        setShowCreateForm(false)
+                        setEditingClient(null)
+                      }}
+                      className="text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                    >
+                      Delete
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/jd')}
+                      className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                    >
+                      JDs
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/candidates?clientId=${client.id}`)}
+                      className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                    >
+                      Candidates
+                    </button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))
+          )}
+        </DataTable>
+      </Card>
     </AppShell>
   )
 }

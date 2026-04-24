@@ -4,11 +4,22 @@ import { useNavigate } from 'react-router-dom'
 import { getClients } from '../api/clientsApi'
 import { createJD, getJDs, uploadJDFile } from '../api/jdApi'
 import AppShell from '../components/AppShell'
+import {
+  AlertBanner, Badge, Card, CardTitle, DataTable, EmptyState,
+  FormField, FormInput, FormSelect, FormTextarea, LoadingState,
+  PrimaryBtn, TableCell, TableRow,
+} from '../components/ui'
 
 const DEFAULT_FORM = {
   title: '',
   client_id: '',
   raw_text: '',
+}
+
+function getStatusVariant(status) {
+  if (status === 'ACTIVE') return 'green'
+  if (status === 'CLOSED') return 'red'
+  return 'gray'
 }
 
 export default function SkillExtractionHub() {
@@ -67,12 +78,6 @@ export default function SkillExtractionHub() {
     setSelectedFile(null)
   }
 
-  function getStatusBadgeClass(status) {
-    if (status === 'ACTIVE') return 'badge badge-green'
-    if (status === 'CLOSED') return 'badge badge-red'
-    return 'badge badge-gray'
-  }
-
   async function handleCreateOpening(event) {
     event.preventDefault()
 
@@ -125,142 +130,136 @@ export default function SkillExtractionHub() {
   }
 
   return (
-    <AppShell>
-      <div className="topbar">
-        <h1>AI Skill Extraction</h1>
-      </div>
+    <AppShell pageTitle="AI Skill Extraction" pageSubtitle="Create openings and extract skills from job descriptions">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+        {/* Create Opening form */}
+        <div>
+          <AlertBanner type="error" message={error} />
+          <AlertBanner type="success" message={success} />
 
-      {error ? <div className="login-error">{error}</div> : null}
-      {success ? <div className="card section-copy section-copy-left">{success}</div> : null}
-
-      <div className="card">
-        <div className="card-title">Create New Opening</div>
-        <form onSubmit={handleCreateOpening}>
-          <div className="form-group">
-            <label className="form-label" htmlFor="se-title">Title</label>
-            <input
-              id="se-title"
-              name="title"
-              type="text"
-              value={formData.title}
-              onChange={(event) => setFormData((prev) => ({ ...prev, title: event.target.value }))}
-              required
-            />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label" htmlFor="se-client">Client</label>
-            <select
-              id="se-client"
-              name="client_id"
-              value={formData.client_id}
-              onChange={(event) => setFormData((prev) => ({ ...prev, client_id: event.target.value }))}
-              required
-            >
-              <option value="">Select client</option>
-              {clients.map((client) => (
-                <option key={client.id} value={client.id}>{client.name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <div className="file-mode-toggle">
-              <label>
-                <input
-                  checked={formMode === 'paste'}
-                  onChange={() => {
-                    setFormMode('paste')
-                    setSelectedFile(null)
-                  }}
-                  type="radio"
+          <Card>
+            <CardTitle>Create New Opening</CardTitle>
+            <form onSubmit={handleCreateOpening}>
+              <FormField label="Title" htmlFor="se-title">
+                <FormInput
+                  id="se-title"
+                  name="title"
+                  type="text"
+                  value={formData.title}
+                  onChange={(event) => setFormData((prev) => ({ ...prev, title: event.target.value }))}
+                  required
+                  placeholder="e.g. Senior React Developer"
                 />
-                Paste text
-              </label>
-              <label>
-                <input
-                  checked={formMode === 'upload'}
-                  onChange={() => {
-                    setFormMode('upload')
-                    setSelectedFile(null)
-                  }}
-                  type="radio"
-                />
-                Upload file
-              </label>
-            </div>
-          </div>
+              </FormField>
 
-          {formMode === 'paste' ? (
-            <div className="form-group">
-              <label className="form-label" htmlFor="se-raw-text">JD text</label>
-              <textarea
-                id="se-raw-text"
-                rows="6"
-                value={formData.raw_text}
-                onChange={(event) => setFormData((prev) => ({ ...prev, raw_text: event.target.value }))}
-                placeholder="Paste job description here..."
-              />
-            </div>
-          ) : (
-            <div className="form-group">
-              <label className="form-label" htmlFor="se-file">Upload .pdf or .docx</label>
-              <input
-                id="se-file"
-                type="file"
-                accept=".pdf,.docx"
-                onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
-              />
-            </div>
-          )}
+              <FormField label="Client" htmlFor="se-client">
+                <FormSelect
+                  id="se-client"
+                  name="client_id"
+                  value={formData.client_id}
+                  onChange={(event) => setFormData((prev) => ({ ...prev, client_id: event.target.value }))}
+                  required
+                >
+                  <option value="">Select client</option>
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.id}>{client.name}</option>
+                  ))}
+                </FormSelect>
+              </FormField>
 
-          <div className="topbar-actions">
-            <button className="btn btn-primary" type="submit" disabled={isSaving}>
-              {isSaving ? 'Saving...' : 'Create Opening'}
-            </button>
-          </div>
-        </form>
-      </div>
-
-      <div className="card">
-        <div className="card-title">Existing Openings</div>
-        {isLoading ? (
-          <div className="loading-state">
-            <div className="loading-spinner" aria-label="Loading openings" />
-            <span>Loading openings...</span>
-          </div>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Title</th>
-                <th>Client</th>
-                <th>Status</th>
-                <th>Created</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {jds.map((jd) => (
-                <tr key={jd.id}>
-                  <td className="table-title-cell">{jd.title}</td>
-                  <td>{clientMap.get(jd.client_id) || `Client #${jd.client_id}`}</td>
-                  <td><span className={getStatusBadgeClass(jd.status)}>{jd.status}</span></td>
-                  <td>{new Date(jd.created_at).toLocaleDateString()}</td>
-                  <td>
+              {/* Mode toggle */}
+              <div className="mb-4">
+                <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">JD Source</label>
+                <div className="flex gap-2 p-1 bg-slate-100 rounded-xl">
+                  {[
+                    { id: 'paste', label: 'Paste Text' },
+                    { id: 'upload', label: 'Upload File' },
+                  ].map((option) => (
                     <button
-                      className="btn table-action-btn"
+                      key={option.id}
                       type="button"
-                      onClick={() => navigate(`/skill-extraction/${jd.id}`)}
+                      onClick={() => {
+                        setFormMode(option.id)
+                        setSelectedFile(null)
+                      }}
+                      className={`flex-1 text-xs font-medium py-2 rounded-lg transition-all ${
+                        formMode === option.id
+                          ? 'bg-white text-blue-700 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
                     >
-                      Open Extraction
+                      {option.label}
                     </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+                  ))}
+                </div>
+              </div>
+
+              {formMode === 'paste' ? (
+                <FormField label="JD Text" htmlFor="se-raw-text">
+                  <FormTextarea
+                    id="se-raw-text"
+                    rows={6}
+                    value={formData.raw_text}
+                    onChange={(event) => setFormData((prev) => ({ ...prev, raw_text: event.target.value }))}
+                    placeholder="Paste job description here..."
+                  />
+                </FormField>
+              ) : (
+                <FormField label="Upload .pdf or .docx" htmlFor="se-file">
+                  <input
+                    id="se-file"
+                    type="file"
+                    accept=".pdf,.docx"
+                    onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+                    className="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                  />
+                </FormField>
+              )}
+
+              <PrimaryBtn type="submit" loading={isSaving} className="w-full justify-center mt-2">
+                {isSaving ? 'Saving...' : 'Create Opening & Extract'}
+              </PrimaryBtn>
+            </form>
+          </Card>
+        </div>
+
+        {/* Existing openings */}
+        <div>
+          <Card>
+            <CardTitle>Existing Openings</CardTitle>
+            <DataTable
+              headers={['Title', 'Client', 'Status', 'Created', 'Action']}
+              loading={isLoading}
+              loadingLabel="Loading openings..."
+            >
+              {jds.length === 0 && !isLoading ? (
+                <tr><td colSpan={5}><EmptyState message="No openings yet" /></td></tr>
+              ) : (
+                jds.map((jd) => (
+                  <TableRow key={jd.id}>
+                    <TableCell className="font-medium text-slate-900 max-w-[140px]">
+                      <div className="truncate">{jd.title}</div>
+                    </TableCell>
+                    <TableCell className="text-slate-600">{clientMap.get(jd.client_id) || `Client #${jd.client_id}`}</TableCell>
+                    <TableCell>
+                      <Badge variant={getStatusVariant(jd.status)}>{jd.status}</Badge>
+                    </TableCell>
+                    <TableCell className="text-slate-500 text-xs">{new Date(jd.created_at).toLocaleDateString()}</TableCell>
+                    <TableCell>
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/skill-extraction/${jd.id}`)}
+                        className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                      >
+                        Open
+                      </button>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </DataTable>
+          </Card>
+        </div>
       </div>
     </AppShell>
   )

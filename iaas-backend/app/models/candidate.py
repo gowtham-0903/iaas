@@ -36,3 +36,4 @@ class Candidate(db.Model):
 
     def __repr__(self) -> str:
         return f"<Candidate {self.full_name}>"
+

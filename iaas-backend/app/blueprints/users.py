@@ -9,16 +9,151 @@ from app.schemas.user_schema import create_user_schema, update_user_schema, user
 
 users_bp = Blueprint("users", __name__, url_prefix="/api/users")
 
+RECRUITER_ROLES = {
+    UserRole.M_RECRUITER.value,
+    UserRole.SR_RECRUITER.value,
+    UserRole.RECRUITER.value,
+}
+
+
+def _get_current_user():
+    user_id = get_jwt_identity()
+    return User.query.get(int(user_id)) if user_id else None
+
+
+def _can_manage_user(actor, target_user):
+    if actor.role == UserRole.ADMIN.value:
+        return True
+
+    if actor.client_id is None or actor.client_id != target_user.client_id:
+        return False
+
+    if actor.role == UserRole.M_RECRUITER.value:
+        return target_user.role in {
+            UserRole.SR_RECRUITER.value,
+            UserRole.RECRUITER.value,
+        }
+
+    if actor.role == UserRole.SR_RECRUITER.value:
+        return target_user.role == UserRole.RECRUITER.value
+
+    return False
+
+
+def _validate_managed_role_and_client(actor, target_role, target_client_id):
+    if actor.role == UserRole.ADMIN.value:
+        return None
+
+    if actor.client_id is None or target_client_id != actor.client_id:
+        return "Must manage users in your own client"
+
+    if actor.role == UserRole.M_RECRUITER.value and target_role not in {
+        UserRole.SR_RECRUITER.value,
+        UserRole.RECRUITER.value,
+    }:
+        return "M_RECRUITER can only manage SR_RECRUITER or RECRUITER"
+
+    if actor.role == UserRole.SR_RECRUITER.value and target_role != UserRole.RECRUITER.value:
+        return "SR_RECRUITER can only manage RECRUITER"
+
+    return None
+
+
+def _validate_reports_to(target_role, target_client_id, reports_to):
+    if reports_to is None:
+        return None
+
+    manager = User.query.get(int(reports_to))
+
+    if target_role == UserRole.SR_RECRUITER.value:
+        if (
+            manager is None
+            or manager.role != UserRole.M_RECRUITER.value
+            or manager.client_id != target_client_id
+        ):
+            return "Manager must be an M_RECRUITER in the same client"
+
+    if target_role == UserRole.RECRUITER.value:
+        if (
+            manager is None
+            or manager.role not in {UserRole.SR_RECRUITER.value, UserRole.M_RECRUITER.value}
+            or manager.client_id != target_client_id
+        ):
+            return "Manager must be an SR_RECRUITER or M_RECRUITER in the same client"
+
+    return None
+
 
 @users_bp.get("")
 @jwt_required()
 def list_users():
     role = get_jwt().get("role")
-    if role != "ADMIN":
+    current_user = _get_current_user()
+    if current_user is None:
+        return jsonify({"message": "User not found"}), 404
+
+    if role == UserRole.ADMIN.value:
+        users = (
+            User.query.filter(User.id != current_user.id)
+            .order_by(User.full_name.asc())
+            .all()
+        )
+        return jsonify({"users": users_schema.dump(users)}), 200
+
+    if role in {UserRole.M_RECRUITER.value, UserRole.SR_RECRUITER.value}:
+        allowed_roles = [UserRole.RECRUITER.value]
+        if role == UserRole.M_RECRUITER.value:
+            allowed_roles.insert(0, UserRole.SR_RECRUITER.value)
+
+        users = (
+            User.query.filter(
+                User.client_id == current_user.client_id,
+                User.id != current_user.id,
+                User.role.in_(allowed_roles),
+            )
+            .order_by(User.full_name.asc())
+            .all()
+        )
+        return jsonify({"users": users_schema.dump(users)}), 200
+
+    return jsonify({"message": "Forbidden"}), 403
+
+
+@users_bp.get("/by-client/<int:client_id>")
+@jwt_required()
+def list_users_by_client(client_id):
+    role = get_jwt().get("role")
+    if role not in {
+        UserRole.ADMIN.value,
+        UserRole.M_RECRUITER.value,
+        UserRole.SR_RECRUITER.value,
+    }:
         return jsonify({"message": "Forbidden"}), 403
 
-    users = User.query.order_by(User.full_name.asc()).all()
-    return jsonify({"users": users_schema.dump(users)}), 200
+    if role in {UserRole.M_RECRUITER.value, UserRole.SR_RECRUITER.value}:
+        current_user = _get_current_user()
+        if current_user is None:
+            return jsonify({"message": "User not found"}), 404
+        if current_user.client_id != client_id:
+            return jsonify({"message": "Forbidden"}), 403
+
+    users = (
+        User.query.filter_by(client_id=client_id, is_active=True)
+        .order_by(User.full_name.asc())
+        .all()
+    )
+
+    return jsonify({
+        "users": [
+            {
+                "id": user.id,
+                "full_name": user.full_name,
+                "role": user.role,
+                "email": user.email,
+            }
+            for user in users
+        ]
+    }), 200
 
 
 @users_bp.post("")
@@ -34,8 +169,7 @@ def create_user():
 
     current_user = None
     if role != UserRole.ADMIN.value:
-        user_id = get_jwt_identity()
-        current_user = User.query.get(int(user_id)) if user_id else None
+        current_user = _get_current_user()
         if current_user is None:
             return jsonify({"message": "User not found"}), 404
 
@@ -48,6 +182,10 @@ def create_user():
 
     target_role = validated_data.get("role")
     target_client_id = validated_data.get("client_id")
+    target_reports_to = validated_data.get("reports_to")
+
+    if target_role in RECRUITER_ROLES and target_client_id is None:
+        return jsonify({"message": "Client is required for recruiter roles"}), 400
 
     # Role-based creation rules
     if role == UserRole.M_RECRUITER.value:
@@ -62,6 +200,10 @@ def create_user():
             return jsonify({"message": "SR_RECRUITER can only create RECRUITER"}), 403
         if current_user.client_id is None or target_client_id != current_user.client_id:
             return jsonify({"message": "Must create users in your own client"}), 403
+
+    manager_error = _validate_reports_to(target_role, target_client_id, target_reports_to)
+    if manager_error:
+        return jsonify({"message": manager_error}), 400
 
     existing_user = User.query.filter_by(email=validated_data["email"].strip().lower()).first()
     if existing_user is not None:
@@ -87,12 +229,23 @@ def create_user():
 @jwt_required()
 def update_user(user_id):
     role = get_jwt().get("role")
-    if role != "ADMIN":
+    if role not in {
+        UserRole.ADMIN.value,
+        UserRole.M_RECRUITER.value,
+        UserRole.SR_RECRUITER.value,
+    }:
         return jsonify({"message": "Forbidden"}), 403
 
     user = User.query.get(user_id)
     if user is None:
         return jsonify({"error": "User not found"}), 404
+
+    current_user = _get_current_user()
+    if current_user is None:
+        return jsonify({"message": "User not found"}), 404
+
+    if not _can_manage_user(current_user, user):
+        return jsonify({"message": "Forbidden"}), 403
 
     payload = request.get_json(silent=True) or {}
 
@@ -100,6 +253,29 @@ def update_user(user_id):
         validated_data = update_user_schema.load(payload)
     except ValidationError as err:
         return jsonify({"errors": err.messages}), 400
+
+    target_role = validated_data.get("role", user.role)
+    target_client_id = validated_data.get("client_id", user.client_id)
+
+    role_validation_error = _validate_managed_role_and_client(
+        current_user,
+        target_role,
+        target_client_id,
+    )
+    if role_validation_error:
+        return jsonify({"message": role_validation_error}), 403
+
+    if target_role in RECRUITER_ROLES and target_client_id is None:
+        return jsonify({"message": "Client is required for recruiter roles"}), 400
+
+    if "reports_to" in validated_data and validated_data["reports_to"] is not None:
+        manager_error = _validate_reports_to(
+            target_role,
+            target_client_id,
+            validated_data["reports_to"],
+        )
+        if manager_error:
+            return jsonify({"message": manager_error}), 400
 
     if "email" in validated_data:
         normalized_email = validated_data["email"].strip().lower()
@@ -136,12 +312,23 @@ def update_user(user_id):
 @jwt_required()
 def delete_user(user_id):
     role = get_jwt().get("role")
-    if role != "ADMIN":
+    if role not in {
+        UserRole.ADMIN.value,
+        UserRole.M_RECRUITER.value,
+        UserRole.SR_RECRUITER.value,
+    }:
         return jsonify({"message": "Forbidden"}), 403
 
     user = User.query.get(user_id)
     if user is None:
         return jsonify({"error": "User not found"}), 404
+
+    current_user = _get_current_user()
+    if current_user is None:
+        return jsonify({"message": "User not found"}), 404
+
+    if not _can_manage_user(current_user, user):
+        return jsonify({"message": "Forbidden"}), 403
 
     db.session.delete(user)
     db.session.commit()

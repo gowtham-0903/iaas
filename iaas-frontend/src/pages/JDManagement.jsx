@@ -11,6 +11,11 @@ import {
   uploadJDFile,
 } from '../api/jdApi'
 import AppShell from '../components/AppShell'
+import {
+  AlertBanner, Badge, Card, DataTable, EmptyState, FormField,
+  FormInput, FormSelect, FormTextarea, LoadingState, ModalOverlay,
+  PrimaryBtn, SecondaryBtn, TableCell, TableRow,
+} from '../components/ui'
 
 const JD_STATUSES = ['DRAFT', 'ACTIVE', 'CLOSED']
 
@@ -18,6 +23,35 @@ const DEFAULT_FORM = {
   title: '',
   client_id: '',
   raw_text: '',
+}
+
+function ViewIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+      <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  )
+}
+
+function DownloadIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+      <path d="M12 15V3" />
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="m7 10 5 5 5-5" />
+    </svg>
+  )
+}
+
+function getStatusSelectClasses(status) {
+  if (status === 'ACTIVE') {
+    return 'bg-emerald-50 text-emerald-700 border-emerald-200'
+  }
+  if (status === 'CLOSED') {
+    return 'bg-red-50 text-red-700 border-red-200'
+  }
+  return 'bg-slate-100 text-slate-700 border-slate-200'
 }
 
 export default function JDManagement() {
@@ -75,12 +109,6 @@ export default function JDManagement() {
       isMounted = false
     }
   }, [])
-
-  function getStatusBadgeClass(status) {
-    if (status === 'ACTIVE') return 'badge badge-green'
-    if (status === 'CLOSED') return 'badge badge-red'
-    return 'badge badge-gray'
-  }
 
   function resetForm() {
     setFormData(DEFAULT_FORM)
@@ -215,112 +243,125 @@ export default function JDManagement() {
   }
 
   return (
-    <AppShell>
-      <div className="topbar">
-        <h1>Job Descriptions</h1>
-        <button className="btn btn-primary" onClick={openModal} type="button">
-          New JD
-        </button>
+    <AppShell pageTitle="Job Descriptions" pageSubtitle="Create and manage job descriptions for clients">
+      <div className="flex items-center justify-between mb-5">
+        <div />
+        <PrimaryBtn onClick={openModal}>
+          + New JD
+        </PrimaryBtn>
       </div>
 
-      {error ? <div className="login-error">{error}</div> : null}
-      {success ? <div className="card section-copy section-copy-left">{success}</div> : null}
+      <AlertBanner type="error" message={error} />
+      <AlertBanner type="success" message={success} />
 
-      <div className="card">
-        {isLoading ? (
-          <div className="loading-state">
-            <div className="loading-spinner" aria-label="Loading JDs" />
-            <span>Loading job descriptions...</span>
-          </div>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Title</th>
-                <th>Job Code</th>
-                <th>Client</th>
-                <th>Status</th>
-                <th>Created Date</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {jds.map((jd) => (
-                <tr key={jd.id}>
-                  <td className="table-title-cell">{jd.title}</td>
-                  <td>{jd.job_code || '—'}</td>
-                  <td>{clientMap.get(jd.client_id) || `Client #${jd.client_id}`}</td>
-                  <td>
-                    <div className="jd-status-cell">
-                      <span className={getStatusBadgeClass(jd.status)}>{jd.status}</span>
-                      <select
-                        className="jd-status-select"
-                        value={jd.status}
-                        disabled={isStatusSavingId === jd.id}
-                        onChange={(event) => handleStatusChange(jd.id, event.target.value)}
-                      >
-                        {JD_STATUSES.map((status) => (
-                          <option key={status} value={status}>{status}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </td>
-                  <td>{new Date(jd.created_at).toLocaleDateString()}</td>
-                  <td>
-                    <div className="topbar-actions">
-                      <button
-                        className="btn table-action-btn"
-                        onClick={() => handleExtractSkills(jd.id)}
-                        disabled={isExtractingId === jd.id}
-                        type="button"
-                      >
-                        {isExtractingId === jd.id ? 'Extracting...' : 'Extract Skills'}
-                      </button>
-                      <button
-                        className="btn table-action-btn"
-                        onClick={() => navigate(`/skill-extraction/${jd.id}`)}
-                        type="button"
-                      >
-                        View
-                      </button>
-                      <button
-                        className="btn table-action-btn"
-                        onClick={() => handleDownloadFile(jd)}
-                        type="button"
-                        disabled={!jd.file_url}
-                        title={jd.file_url ? 'Download uploaded JD file' : 'No uploaded file'}
-                      >
-                        Download
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <Card>
+        <DataTable
+          headers={['Title', 'Job Code', 'Client', 'Status', 'Created', 'Actions']}
+          loading={isLoading}
+          loadingLabel="Loading job descriptions..."
+        >
+          {jds.length === 0 && !isLoading ? (
+            <tr><td colSpan={6}><EmptyState message="No job descriptions yet" /></td></tr>
+          ) : (
+            jds.map((jd) => (
+              <TableRow key={jd.id}>
+                <TableCell className="font-medium text-slate-900 whitespace-normal break-words max-w-[320px]">
+                  <div>{jd.title}</div>
+                </TableCell>
+                <TableCell>
+                  {jd.job_code
+                    ? <Badge variant="blue">{jd.job_code}</Badge>
+                    : <span className="text-slate-400">—</span>
+                  }
+                </TableCell>
+                <TableCell>{clientMap.get(jd.client_id) || `Client #${jd.client_id}`}</TableCell>
+                <TableCell>
+                  <select
+                    value={jd.status}
+                    disabled={isStatusSavingId === jd.id}
+                    onChange={(event) => handleStatusChange(jd.id, event.target.value)}
+                    title="Click to change status"
+                    className={`appearance-none cursor-pointer inline-flex items-center rounded-full border px-4 py-1 text-[11px] font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50 ${getStatusSelectClasses(jd.status)}`}
+                  >
+                    {JD_STATUSES.map((status) => (
+                      <option key={status} value={status}>{status}</option>
+                    ))}
+                  </select>
+                </TableCell>
+                <TableCell className="text-slate-500">{new Date(jd.created_at).toLocaleDateString()}</TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-1.5 whitespace-nowrap">
+                    <button
+                      type="button"
+                      onClick={() => handleExtractSkills(jd.id)}
+                      disabled={isExtractingId === jd.id}
+                      className="text-xs bg-[#02c0fa] hover:bg-[#00a8e0] text-white px-2.5 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
+                    >
+                      {isExtractingId === jd.id ? (
+                        <><span className="w-3 h-3 border border-white/40 border-t-white rounded-full spin" />Extracting...</>
+                      ) : 'Extract Skills'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/skill-extraction/${jd.id}`)}
+                      aria-label="View job description"
+                      title="View job description"
+                      className="inline-flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-700 p-2 rounded-lg transition-colors"
+                    >
+                      <ViewIcon />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadFile(jd)}
+                      disabled={!jd.file_url}
+                      aria-label="Download job description file"
+                      title={jd.file_url ? 'Download uploaded JD file' : 'No uploaded file'}
+                      className="inline-flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-700 p-2 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <DownloadIcon />
+                    </button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))
+          )}
+        </DataTable>
+      </Card>
 
-      {isModalOpen ? (
-        <div className="modal-overlay" role="presentation" onClick={closeModal}>
-          <div className="modal-card" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-            <div className="card-title">Create New JD</div>
+      {/* Create JD Modal */}
+      {isModalOpen && (
+        <ModalOverlay onClose={closeModal}>
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-base font-semibold text-slate-900">Create New JD</h2>
+              <button
+                type="button"
+                onClick={closeModal}
+                className="text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <AlertBanner type="error" message={error} />
+
             <form onSubmit={handleCreateJD}>
-              <div className="form-group">
-                <label className="form-label" htmlFor="jd-title">Title</label>
-                <input
+              <FormField label="Title" htmlFor="jd-title">
+                <FormInput
                   id="jd-title"
                   name="title"
                   type="text"
                   value={formData.title}
                   onChange={handleFieldChange}
                   required
+                  placeholder="e.g. Senior React Developer"
                 />
-              </div>
+              </FormField>
 
-              <div className="form-group">
-                <label className="form-label" htmlFor="jd-client">Client</label>
-                <select
+              <FormField label="Client" htmlFor="jd-client">
+                <FormSelect
                   id="jd-client"
                   name="client_id"
                   value={formData.client_id}
@@ -331,68 +372,60 @@ export default function JDManagement() {
                   {clients.map((client) => (
                     <option key={client.id} value={client.id}>{client.name}</option>
                   ))}
-                </select>
-              </div>
+                </FormSelect>
+              </FormField>
 
-              <div className="form-group">
-                <div className="file-mode-toggle">
-                  <label>
-                    <input
-                      checked={formMode === 'paste'}
-                      onChange={() => handleModeChange('paste')}
-                      type="radio"
-                    />
-                    Paste text
-                  </label>
-                  <label>
-                    <input
-                      checked={formMode === 'upload'}
-                      onChange={() => handleModeChange('upload')}
-                      type="radio"
-                    />
-                    Upload file
-                  </label>
+              {/* Mode toggle */}
+              <div className="mb-4">
+                <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">JD Source</label>
+                <div className="flex gap-3">
+                  {['paste', 'upload'].map((mode) => (
+                    <label key={mode} className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        checked={formMode === mode}
+                        onChange={() => handleModeChange(mode)}
+                        className="text-blue-600"
+                      />
+                      <span className="text-sm text-slate-700 capitalize">{mode === 'paste' ? 'Paste text' : 'Upload file'}</span>
+                    </label>
+                  ))}
                 </div>
               </div>
 
               {formMode === 'paste' ? (
-                <div className="form-group">
-                  <label className="form-label" htmlFor="jd-raw-text">Paste JD text</label>
-                  <textarea
+                <FormField label="Paste JD Text" htmlFor="jd-raw-text">
+                  <FormTextarea
                     id="jd-raw-text"
                     name="raw_text"
-                    rows="6"
+                    rows={6}
                     value={formData.raw_text}
                     onChange={handleFieldChange}
                     placeholder="Paste job description text here..."
                   />
-                </div>
+                </FormField>
               ) : (
-                <div className="form-group">
-                  <label className="form-label" htmlFor="jd-file">Upload .pdf or .docx</label>
+                <FormField label="Upload .pdf or .docx" htmlFor="jd-file">
                   <input
                     id="jd-file"
                     type="file"
                     accept=".pdf,.docx"
-                    onChange={(event) => {
-                      setSelectedFile(event.target.files?.[0] || null)
-                    }}
+                    onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+                    className="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                   />
-                </div>
+                </FormField>
               )}
 
-              <div className="topbar-actions">
-                <button className="btn btn-primary" disabled={isSaving} type="submit">
+              <div className="flex gap-2 pt-2">
+                <PrimaryBtn type="submit" loading={isSaving}>
                   {isSaving ? 'Saving...' : 'Save JD'}
-                </button>
-                <button className="btn" disabled={isSaving} onClick={closeModal} type="button">
-                  Cancel
-                </button>
+                </PrimaryBtn>
+                <SecondaryBtn onClick={closeModal} disabled={isSaving}>Cancel</SecondaryBtn>
               </div>
             </form>
           </div>
-        </div>
-      ) : null}
+        </ModalOverlay>
+      )}
     </AppShell>
   )
 }

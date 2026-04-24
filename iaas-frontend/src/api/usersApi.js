@@ -4,6 +4,10 @@ export function getUsers() {
   return axiosInstance.get('/api/users')
 }
 
+export function getUsersByClient(clientId) {
+  return axiosInstance.get(`/api/users/by-client/${clientId}`)
+}
+
 export function createUser(userData) {
   return axiosInstance.post('/api/users', userData)
 }

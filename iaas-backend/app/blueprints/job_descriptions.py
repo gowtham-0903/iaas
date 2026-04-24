@@ -77,6 +77,11 @@ def _resolve_upload_absolute_path(relative_path):
     return candidate_path
 
 
+def _is_jd_assigned_to_recruiter(jd_id: int, recruiter_id: int) -> bool:
+    assignment = JDRecruiterAssignment.query.filter_by(jd_id=jd_id, recruiter_id=recruiter_id).first()
+    return assignment is not None
+
+
 def _get_accessible_jd(jd_id):
     role = get_jwt().get("role")
     if role not in ALLOWED_RECRUITER_AND_ABOVE:
@@ -90,8 +95,11 @@ def _get_accessible_jd(jd_id):
     if jd is None:
         return None, (jsonify({"error": "JD not found"}), 404)
 
-    if role == UserRole.RECRUITER.value and current_user.client_id != jd.client_id:
-        return None, (jsonify({"message": "Forbidden"}), 403)
+    if role == UserRole.RECRUITER.value:
+        if current_user.client_id != jd.client_id:
+            return None, (jsonify({"message": "Forbidden"}), 403)
+        if not _is_jd_assigned_to_recruiter(jd.id, current_user.id):
+            return None, (jsonify({"message": "Forbidden"}), 403)
 
     return jd, None
 
@@ -146,20 +154,14 @@ def list_jds():
     query = JobDescription.query
 
     if role == UserRole.RECRUITER.value:
-        # For recruiters: show only assigned JDs, fallback to all if no assignments exist
+        # Recruiters can see only explicitly assigned JDs.
         assigned_jds = JDRecruiterAssignment.query.filter_by(recruiter_id=current_user.id).with_entities(
             JDRecruiterAssignment.jd_id
         ).all()
         assigned_jd_ids = [assignment.jd_id for assignment in assigned_jds]
-        
-        if assigned_jd_ids:
-            # Show only assigned JDs
-            query = query.filter(JobDescription.id.in_(assigned_jd_ids))
-        else:
-            # No assignments: fallback to show all JDs from recruiter's client
-            if current_user.client_id is None:
-                return jsonify({"jds": []}), 200
-            query = query.filter(JobDescription.client_id == current_user.client_id)
+        if not assigned_jd_ids:
+            return jsonify({"jds": []}), 200
+        query = query.filter(JobDescription.id.in_(assigned_jd_ids))
     elif role in {UserRole.ADMIN.value, UserRole.SR_RECRUITER.value, UserRole.M_RECRUITER.value, UserRole.QC.value}:
         pass
     else:
@@ -187,8 +189,11 @@ def get_jd(jd_id):
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
-    if role == UserRole.RECRUITER.value and current_user.client_id != jd.client_id:
-        return jsonify({"message": "Forbidden"}), 403
+    if role == UserRole.RECRUITER.value:
+        if current_user.client_id != jd.client_id:
+            return jsonify({"message": "Forbidden"}), 403
+        if not _is_jd_assigned_to_recruiter(jd.id, current_user.id):
+            return jsonify({"message": "Forbidden"}), 403
 
     if role not in ALLOWED_RECRUITER_AND_ABOVE:
         return jsonify({"message": "Forbidden"}), 403
@@ -211,8 +216,11 @@ def update_jd_status(jd_id):
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
-    if role == UserRole.RECRUITER.value and current_user.client_id != jd.client_id:
-        return jsonify({"message": "Forbidden"}), 403
+    if role == UserRole.RECRUITER.value:
+        if current_user.client_id != jd.client_id:
+            return jsonify({"message": "Forbidden"}), 403
+        if not _is_jd_assigned_to_recruiter(jd.id, current_user.id):
+            return jsonify({"message": "Forbidden"}), 403
 
     payload = request.get_json(silent=True) or {}
     status = payload.get("status")
@@ -261,8 +269,11 @@ def upload_jd_file(jd_id):
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
-    if role == UserRole.RECRUITER.value and current_user.client_id != jd.client_id:
-        return jsonify({"message": "Forbidden"}), 403
+    if role == UserRole.RECRUITER.value:
+        if current_user.client_id != jd.client_id:
+            return jsonify({"message": "Forbidden"}), 403
+        if not _is_jd_assigned_to_recruiter(jd.id, current_user.id):
+            return jsonify({"message": "Forbidden"}), 403
 
     if jd.status == "CLOSED":
         return jsonify({"error": "Cannot upload files to a closed JD"}), 409
@@ -334,8 +345,11 @@ def extract_jd_skills(jd_id):
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
-    if role == UserRole.RECRUITER.value and current_user.client_id != jd.client_id:
-        return jsonify({"message": "Forbidden"}), 403
+    if role == UserRole.RECRUITER.value:
+        if current_user.client_id != jd.client_id:
+            return jsonify({"message": "Forbidden"}), 403
+        if not _is_jd_assigned_to_recruiter(jd.id, current_user.id):
+            return jsonify({"message": "Forbidden"}), 403
 
     if not jd.raw_text or not jd.raw_text.strip():
         return jsonify({"error": "No text to extract from"}), 400

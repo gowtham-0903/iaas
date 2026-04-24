@@ -1,0 +1,83 @@
+services:
+  iaas-frontend:
+    image: ghcr.io/gowtham-0903/iaas-frontend:${IMAGE_TAG:-latest}
+    container_name: iaas-frontend
+    restart: unless-stopped
+    networks:
+      - iaas-net
+    environment:
+      - NODE_ENV=production
+
+  iaas-backend:
+    image: ghcr.io/gowtham-0903/iaas-backend:${IMAGE_TAG:-latest}
+    container_name: iaas-backend
+    restart: unless-stopped
+    networks:
+      - iaas-net
+    env_file:
+      - .env
+    depends_on:
+      iaas-db:
+        condition: service_healthy
+    volumes:
+      - resume-uploads:/app/uploads
+
+  iaas-db:
+    image: mysql:8.0
+    container_name: iaas-db
+    restart: unless-stopped
+    networks:
+      - iaas-net
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: iaas
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nginx-proxy-manager:
+    image: jc21/nginx-proxy-manager:latest
+    container_name: nginx-proxy-manager
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "81:81"
+    volumes:
+      - npm-data:/data
+      - npm-letsencrypt:/etc/letsencrypt
+    depends_on:
+      - npm-db
+    networks:
+      - iaas-net
+
+  npm-db:
+    image: mysql:8.0
+    container_name: npm-db
+    restart: unless-stopped
+    networks:
+      - iaas-net
+    environment:
+      MYSQL_ROOT_PASSWORD: ${NPM_DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: npm
+      MYSQL_USER: npm
+      MYSQL_PASSWORD: ${NPM_DB_PASSWORD}
+    volumes:
+      - npm-mysql-data:/var/lib/mysql
+
+volumes:
+  mysql-data:
+  npm-data:
+  npm-letsencrypt:
+  npm-mysql-data:
+  resume-uploads:
+
+networks:
+  iaas-net:
+    driver: bridge

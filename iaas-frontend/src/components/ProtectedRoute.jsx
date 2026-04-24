@@ -53,7 +53,12 @@ export default function ProtectedRoute({ children }) {
   }, [logout, setUser])
 
   if (isChecking) {
-    return <div className="loading-state"><div className="loading-spinner" aria-label="Checking session" /><span>Checking session...</span></div>
+    return (
+      <div className="flex items-center justify-center gap-2.5 min-h-screen text-slate-500 text-sm">
+        <span className="w-5 h-5 border-2 border-blue-200 border-t-blue-600 rounded-full spin" aria-label="Checking session" />
+        Checking session...
+      </div>
+    )
   }
 
   if (!isAuthenticated) {

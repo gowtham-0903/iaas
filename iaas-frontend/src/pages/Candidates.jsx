@@ -5,8 +5,21 @@ import { createCandidate, deleteCandidate, getCandidates, updateCandidate } from
 import { getClients } from '../api/clientsApi'
 import { getJDs } from '../api/jdApi'
 import AppShell from '../components/AppShell'
+import {
+  AlertBanner, Avatar, Badge, Card, CardTitle, DataTable,
+  EmptyState, FormField, FormInput, FormSelect, LoadingState,
+  PrimaryBtn, SecondaryBtn, TableCell, TableRow,
+} from '../components/ui'
 
 const CANDIDATE_STATUSES = ['APPLIED', 'SHORTLISTED', 'INTERVIEWED', 'SELECTED', 'NOT_SELECTED']
+
+const STATUS_VARIANTS = {
+  SELECTED: 'green',
+  NOT_SELECTED: 'red',
+  INTERVIEWED: 'amber',
+  SHORTLISTED: 'blue',
+  APPLIED: 'gray',
+}
 
 const DEFAULT_FORM = {
   client_id: '',
@@ -75,14 +88,6 @@ export default function Candidates() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClientId, selectedJdId])
 
-  function getStatusBadgeClass(status) {
-    if (status === 'SELECTED') return 'badge badge-green'
-    if (status === 'NOT_SELECTED') return 'badge badge-red'
-    if (status === 'INTERVIEWED') return 'badge badge-amber'
-    if (status === 'SHORTLISTED') return 'badge badge-blue'
-    return 'badge badge-gray'
-  }
-
   function resetForm() {
     setFormData({ ...DEFAULT_FORM, client_id: selectedClientId || '' })
     setShowCreateForm(false)
@@ -139,12 +144,10 @@ export default function Candidates() {
   }
 
   return (
-    <AppShell>
-      <div className="topbar">
-        <h1>Candidates</h1>
-        <button
-          className="btn btn-primary"
-          type="button"
+    <AppShell pageTitle="Candidates" pageSubtitle="Track and manage interview candidates">
+      <div className="flex items-center justify-between mb-5">
+        <div />
+        <PrimaryBtn
           onClick={() => {
             setShowCreateForm((previous) => !previous)
             setFormData({ ...DEFAULT_FORM, client_id: selectedClientId || '' })
@@ -153,17 +156,17 @@ export default function Candidates() {
           }}
         >
           {showCreateForm ? 'Close' : '+ Add Candidate'}
-        </button>
+        </PrimaryBtn>
       </div>
 
-      {error ? <div className="login-error">{error}</div> : null}
-      {success ? <div className="card section-copy section-copy-left">{success}</div> : null}
+      <AlertBanner type="error" message={error} />
+      <AlertBanner type="success" message={success} />
 
-      <div className="card">
-        <div className="two-col">
-          <div className="form-group">
-            <label className="form-label" htmlFor="candidate_filter_client">Filter by Client</label>
-            <select
+      {/* Filters */}
+      <Card>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <FormField label="Filter by Client" htmlFor="candidate_filter_client">
+            <FormSelect
               id="candidate_filter_client"
               value={selectedClientId}
               onChange={(event) => {
@@ -175,11 +178,10 @@ export default function Candidates() {
               {clients.map((client) => (
                 <option key={client.id} value={client.id}>{client.name}</option>
               ))}
-            </select>
-          </div>
-          <div className="form-group">
-            <label className="form-label" htmlFor="candidate_filter_jd">Filter by JD</label>
-            <select
+            </FormSelect>
+          </FormField>
+          <FormField label="Filter by JD" htmlFor="candidate_filter_jd">
+            <FormSelect
               id="candidate_filter_jd"
               value={selectedJdId}
               onChange={(event) => setSelectedJdId(event.target.value)}
@@ -188,19 +190,19 @@ export default function Candidates() {
               {filteredJds.map((jd) => (
                 <option key={jd.id} value={jd.id}>{jd.title}</option>
               ))}
-            </select>
-          </div>
+            </FormSelect>
+          </FormField>
         </div>
-      </div>
+      </Card>
 
-      {showCreateForm ? (
-        <div className="card">
-          <div className="card-title">Create Candidate</div>
+      {/* Create form */}
+      {showCreateForm && (
+        <Card>
+          <CardTitle>Create Candidate</CardTitle>
           <form onSubmit={handleCreateCandidate}>
-            <div className="two-col">
-              <div className="form-group">
-                <label className="form-label" htmlFor="candidate_client_id">Client</label>
-                <select
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <FormField label="Client" htmlFor="candidate_client_id">
+                <FormSelect
                   id="candidate_client_id"
                   value={formData.client_id}
                   onChange={(event) => {
@@ -216,11 +218,10 @@ export default function Candidates() {
                   {clients.map((client) => (
                     <option key={client.id} value={client.id}>{client.name}</option>
                   ))}
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="candidate_jd_id">Job Description</label>
-                <select
+                </FormSelect>
+              </FormField>
+              <FormField label="Job Description" htmlFor="candidate_jd_id">
+                <FormSelect
                   id="candidate_jd_id"
                   value={formData.jd_id}
                   onChange={(event) => setFormData((previous) => ({ ...previous, jd_id: event.target.value }))}
@@ -230,36 +231,33 @@ export default function Candidates() {
                   {jdsForForm.map((jd) => (
                     <option key={jd.id} value={jd.id}>{jd.title}</option>
                   ))}
-                </select>
-              </div>
+                </FormSelect>
+              </FormField>
             </div>
-
-            <div className="two-col">
-              <div className="form-group">
-                <label className="form-label" htmlFor="candidate_full_name">Full Name</label>
-                <input
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <FormField label="Full Name" htmlFor="candidate_full_name">
+                <FormInput
                   id="candidate_full_name"
                   type="text"
                   value={formData.full_name}
                   onChange={(event) => setFormData((previous) => ({ ...previous, full_name: event.target.value }))}
                   required
+                  placeholder="John Doe"
                 />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="candidate_email">Email</label>
-                <input
+              </FormField>
+              <FormField label="Email" htmlFor="candidate_email">
+                <FormInput
                   id="candidate_email"
                   type="email"
                   value={formData.email}
                   onChange={(event) => setFormData((previous) => ({ ...previous, email: event.target.value }))}
                   required
+                  placeholder="john@example.com"
                 />
-              </div>
+              </FormField>
             </div>
-
-            <div className="form-group">
-              <label className="form-label" htmlFor="candidate_status">Initial Status</label>
-              <select
+            <FormField label="Initial Status" htmlFor="candidate_status">
+              <FormSelect
                 id="candidate_status"
                 value={formData.status}
                 onChange={(event) => setFormData((previous) => ({ ...previous, status: event.target.value }))}
@@ -267,75 +265,69 @@ export default function Candidates() {
                 {CANDIDATE_STATUSES.map((status) => (
                   <option key={status} value={status}>{status}</option>
                 ))}
-              </select>
-            </div>
-
-            <div className="topbar-actions">
-              <button className="btn btn-primary" type="submit" disabled={isSubmitting}>
+              </FormSelect>
+            </FormField>
+            <div className="flex gap-2 pt-1">
+              <PrimaryBtn type="submit" loading={isSubmitting}>
                 {isSubmitting ? 'Creating...' : 'Create Candidate'}
-              </button>
-              <button className="btn" type="button" onClick={resetForm} disabled={isSubmitting}>
-                Cancel
-              </button>
+              </PrimaryBtn>
+              <SecondaryBtn onClick={resetForm} disabled={isSubmitting}>Cancel</SecondaryBtn>
             </div>
           </form>
-        </div>
-      ) : null}
+        </Card>
+      )}
 
-      <div className="card">
-        {isLoading ? (
-          <div className="loading-state">
-            <div className="loading-spinner" aria-label="Loading candidates" />
-            <span>Loading candidates...</span>
-          </div>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Client</th>
-                <th>JD</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {candidates.map((candidate) => (
-                <tr key={candidate.id}>
-                  <td className="table-title-cell">{candidate.full_name}</td>
-                  <td>{candidate.email}</td>
-                  <td>{clientMap.get(candidate.client_id) || `Client #${candidate.client_id}`}</td>
-                  <td>{jdMap.get(candidate.jd_id)?.title || `JD #${candidate.jd_id}`}</td>
-                  <td>
-                    <div className="jd-status-cell">
-                      <span className={getStatusBadgeClass(candidate.status)}>{candidate.status}</span>
-                      <select
-                        className="jd-status-select"
-                        value={candidate.status}
-                        onChange={(event) => handleStatusChange(candidate.id, event.target.value)}
-                      >
-                        {CANDIDATE_STATUSES.map((status) => (
-                          <option key={status} value={status}>{status}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </td>
-                  <td>
-                    <button
-                      className="btn btn-danger table-action-btn"
-                      type="button"
-                      onClick={() => handleDeleteCandidate(candidate.id)}
+      {/* Candidates table */}
+      <Card>
+        <DataTable
+          headers={['Name', 'Email', 'Client', 'Job Description', 'Status', 'Actions']}
+          loading={isLoading}
+          loadingLabel="Loading candidates..."
+        >
+          {candidates.length === 0 && !isLoading ? (
+            <tr><td colSpan={6}><EmptyState message="No candidates found" /></td></tr>
+          ) : (
+            candidates.map((candidate) => (
+              <TableRow key={candidate.id}>
+                <TableCell>
+                  <div className="flex items-center gap-2.5">
+                    <Avatar name={candidate.full_name} />
+                    <span className="font-medium text-slate-900">{candidate.full_name}</span>
+                  </div>
+                </TableCell>
+                <TableCell className="text-slate-500">{candidate.email}</TableCell>
+                <TableCell>{clientMap.get(candidate.client_id) || `Client #${candidate.client_id}`}</TableCell>
+                <TableCell className="max-w-[180px]">
+                  <div className="truncate text-slate-600">{jdMap.get(candidate.jd_id)?.title || `JD #${candidate.jd_id}`}</div>
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={STATUS_VARIANTS[candidate.status] || 'gray'}>{candidate.status}</Badge>
+                    <select
+                      value={candidate.status}
+                      onChange={(event) => handleStatusChange(candidate.id, event.target.value)}
+                      className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-700"
                     >
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+                      {CANDIDATE_STATUSES.map((status) => (
+                        <option key={status} value={status}>{status}</option>
+                      ))}
+                    </select>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteCandidate(candidate.id)}
+                    className="text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                  >
+                    Delete
+                  </button>
+                </TableCell>
+              </TableRow>
+            ))
+          )}
+        </DataTable>
+      </Card>
     </AppShell>
   )
 }

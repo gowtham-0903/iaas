@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import * as XLSX from 'xlsx'
@@ -14,6 +14,7 @@ import {
   updateSkill,
 } from '../api/jdApi'
 import AppShell from '../components/AppShell'
+import { AlertBanner, Badge, Card, CardTitle, PrimaryBtn, SecondaryBtn } from '../components/ui'
 
 function toCommaText(subtopics) {
   return (subtopics || []).join(', ')
@@ -43,13 +44,14 @@ function buildCard(skill) {
   }
 }
 
-function getSkillTypeClass(skillType) {
-  if (skillType === 'primary') return 'skill-type-pill skill-type-pill-primary'
-  if (skillType === 'soft') return 'skill-type-pill skill-type-pill-soft'
-  return 'skill-type-pill skill-type-pill-secondary'
+function getSkillTypeVariant(skillType) {
+  if (skillType === 'primary') return 'blue'
+  if (skillType === 'soft') return 'green'
+  return 'gray'
 }
 
 export default function SkillExtraction() {
+  const navigate = useNavigate()
   const { jdId } = useParams()
   const [jd, setJD] = useState(null)
   const [skillCards, setSkillCards] = useState([])
@@ -197,8 +199,8 @@ export default function SkillExtraction() {
       setSuccess('JD file uploaded. You can now extract skills.')
       setSelectedFile(null)
       if (fileInputRef.current) {
-  fileInputRef.current.value = ''
-}
+        fileInputRef.current.value = ''
+      }
     } catch (uploadError) {
       const apiError = uploadError?.response?.data
       if (apiError?.errors?.file) {
@@ -406,7 +408,7 @@ export default function SkillExtraction() {
           cellPadding: 2,
         },
         headStyles: {
-          fillColor: [24, 95, 165],
+          fillColor: [37, 99, 235],
         },
       })
 
@@ -420,217 +422,235 @@ export default function SkillExtraction() {
 
   if (isLoading) {
     return (
-      <AppShell>
-        <div className="loading-state">
-          <div className="loading-spinner" aria-label="Loading skill extraction" />
-          <span>Loading JD details...</span>
+      <AppShell pageTitle="Skill Extraction">
+        <div className="flex items-center justify-center gap-2.5 py-20 text-slate-500 text-sm">
+          <span className="w-5 h-5 border-2 border-blue-200 border-t-blue-600 rounded-full spin" />
+          Loading JD details...
         </div>
       </AppShell>
     )
   }
 
   return (
-    <AppShell>
-      <div className="topbar">
-        <h1>Skill Extraction</h1>
+    <AppShell pageTitle="Skill Extraction" pageSubtitle={jd?.title || `JD #${jdId}`}>
+      <div className="flex items-center justify-start mb-5">
+        <SecondaryBtn onClick={() => navigate('/jd')}>
+          Back to Job Descriptions
+        </SecondaryBtn>
       </div>
 
-      {error ? <div className="login-error">{error}</div> : null}
-      {success ? <div className="card section-copy section-copy-left">{success}</div> : null}
+      <AlertBanner type="error" message={error} />
+      <AlertBanner type="success" message={success} />
 
-      <div className="card">
-        <div className="card-title">JD Details</div>
-        <p className="report-copy"><strong>Title:</strong> {jd?.title || '-'}</p>
-        <p className="report-copy"><strong>Raw text preview:</strong> {rawPreview || 'No raw text available.'}</p>
-        <p className="report-copy"><strong>Raw text length:</strong> {(jd?.raw_text || '').length}</p>
-        <div className="raw-text-viewer">
+      {/* JD Details card */}
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <CardTitle>JD Details</CardTitle>
+          {jd?.title && <Badge variant="blue">{jd.status || 'DRAFT'}</Badge>}
+        </div>
+        <div className="text-sm text-slate-700 mb-3">
+          <strong>Title:</strong> {jd?.title || '-'}
+        </div>
+        <div className="text-sm text-slate-500 mb-2">
+          <strong className="text-slate-700">Raw text length:</strong> {(jd?.raw_text || '').length} characters
+        </div>
+        <div className="raw-text-viewer mb-4">
           {(jd?.raw_text && jd.raw_text.trim()) ? jd.raw_text : 'No raw text available.'}
         </div>
-        {(!jd?.raw_text || !jd.raw_text.trim()) ? (
-          <div className="form-group">
-            <label className="form-label" htmlFor="jd-upload">Upload JD (.pdf/.docx)</label>
-            <input
-              ref={fileInputRef}
-  id="jd-upload"
-  type="file"
-  accept=".pdf,.docx"
-  onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
-/>
-            <div className="topbar-actions" style={{ marginTop: '8px' }}>
-              <button
-                className="btn"
-                type="button"
-                onClick={handleUploadJDFile}
-                disabled={isUploading}
-              >
+
+        {(!jd?.raw_text || !jd.raw_text.trim()) && (
+          <div>
+            <label htmlFor="jd-upload" className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1.5">
+              Upload JD (.pdf/.docx)
+            </label>
+            <div className="flex items-center gap-3 mt-2">
+              <input
+                ref={fileInputRef}
+                id="jd-upload"
+                type="file"
+                accept=".pdf,.docx"
+                onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+                className="text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+              />
+              <SecondaryBtn onClick={handleUploadJDFile} disabled={isUploading}>
                 {isUploading ? 'Uploading...' : 'Upload File'}
-              </button>
+              </SecondaryBtn>
             </div>
           </div>
-        ) : null}
-      </div>
+        )}
+      </Card>
 
-      <div className="card skill-panel-card">
-        <div className="topbar skill-topbar">
-          <div className="card-title skill-title-no-margin">Extracted Skills</div>
-          <div className="topbar-actions">
-            <button
-              className="btn"
+      {/* Skills table card */}
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-slate-900">
+            Extracted Skills
+            {skillCards.length > 0 && (
+              <span className="ml-2 text-xs font-normal text-slate-500">({skillCards.length} skills)</span>
+            )}
+          </h2>
+          <div className="flex items-center gap-2">
+            <SecondaryBtn
               disabled={isExtracting || isDownloadingExcel || skillCards.length === 0}
               onClick={handleDownloadExcel}
-              type="button"
             >
-              {isDownloadingExcel ? 'Downloading...' : 'Download Excel'}
-            </button>
-            <button
-              className="btn"
+              {isDownloadingExcel ? 'Downloading...' : 'Excel'}
+            </SecondaryBtn>
+            <SecondaryBtn
               disabled={isExtracting || isDownloadingPdf || skillCards.length === 0}
               onClick={handleDownloadPdf}
-              type="button"
             >
-              {isDownloadingPdf ? 'Downloading...' : 'Download PDF'}
-            </button>
-            <button
-              className="btn btn-primary"
+              {isDownloadingPdf ? 'Downloading...' : 'PDF'}
+            </SecondaryBtn>
+            <PrimaryBtn
               disabled={isExtracting || !jd?.raw_text}
-              title={!jd?.raw_text ? 'Upload a JD file or paste text before extracting skills' : undefined}
               onClick={handleExtract}
-              type="button"
+              title={!jd?.raw_text ? 'Upload a JD file or paste text before extracting skills' : undefined}
+              loading={isExtracting}
             >
-              {isExtracting ? 'Analysing JD with GPT-4o...' : 'Extract Skills'}
-            </button>
+              {isExtracting ? 'Analysing...' : 'Extract Skills'}
+            </PrimaryBtn>
           </div>
         </div>
 
-        <div className="skill-panel-scroll">
-          {isExtracting ? (
-            <div className="loading-state">
-              <div className="loading-spinner" aria-label="Extracting skills" />
-              <span>Analysing JD with GPT-4o...</span>
-            </div>
-          ) : null}
+        {isExtracting && (
+          <div className="flex items-center justify-center gap-2.5 py-6 text-slate-500 text-sm border-b border-slate-100 mb-4">
+            <span className="w-4 h-4 border-2 border-blue-200 border-t-blue-600 rounded-full spin" />
+            Analysing JD with GPT-4o...
+          </div>
+        )}
 
-          <div className="skills-editor-table-wrap">
-            <table className="skills-editor-table" >
-              <thead >
+        <div className="overflow-x-auto -mx-5">
+          <table className="skills-editor-table min-w-[860px]">
+            <thead>
+              <tr className="border-b border-slate-100">
+                <th className="text-left text-[10px] font-semibold text-slate-400 uppercase tracking-widest px-5 py-3 w-[120px]">Type</th>
+                <th className="text-left text-[10px] font-semibold text-slate-400 uppercase tracking-widest px-5 py-3">Skill Name</th>
+                <th className="text-left text-[10px] font-semibold text-slate-400 uppercase tracking-widest px-5 py-3 w-[130px]">Importance</th>
+                <th className="text-left text-[10px] font-semibold text-slate-400 uppercase tracking-widest px-5 py-3">Subtopics (comma-separated)</th>
+                <th className="text-left text-[10px] font-semibold text-slate-400 uppercase tracking-widest px-5 py-3 w-[180px]">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {skillCards.length === 0 ? (
                 <tr>
-                  <th>Type</th>
-                  <th>Skill Name</th>
-                  <th>Importance</th>
-                  <th>Subtopics (comma-separated)</th>
-                  <th>Actions</th>
+                  <td colSpan={5} className="text-center py-10 text-slate-400 text-sm">
+                    No skills yet. Run extraction or add one manually.
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {skillCards.length === 0 ? (
-                  <tr>
-                    <td colSpan="5" className="skills-empty-row">
-                      No skills yet. Run extraction or add one manually.
+              ) : (
+                skillCards.map((card) => (
+                  <tr key={card.local_id || card.id} className="border-b border-slate-50 hover:bg-slate-50/60 transition-colors last:border-0">
+                    <td className="px-5 py-3 w-[120px]">
+                      {card.isEditing && card.isNew ? (
+                        <select
+                          value={card.skill_type}
+                          onChange={(event) => updateCardField(card.local_id, 'skill_type', event.target.value)}
+                          className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-700"
+                        >
+                          <option value="primary">primary</option>
+                          <option value="secondary">secondary</option>
+                          <option value="soft">soft</option>
+                        </select>
+                      ) : (
+                        <Badge variant={getSkillTypeVariant(card.skill_type)}>{card.skill_type || 'secondary'}</Badge>
+                      )}
                     </td>
-                  </tr>
-                ) : (
-                  skillCards.map((card) => (
-                    <tr key={card.local_id || card.id} className="skills-editor-row">
-                      <td className="skills-type-cell">
-                        {card.isEditing && card.isNew ? (
-                          <select
-                            value={card.skill_type}
-                            onChange={(event) => updateCardField(card.local_id, 'skill_type', event.target.value)}
-                          >
-                            <option value="primary">primary</option>
-                            <option value="secondary">secondary</option>
-                            <option value="soft">soft</option>
-                          </select>
-                        ) : (
-                          <span className={getSkillTypeClass(card.skill_type)}>{card.skill_type || 'secondary'}</span>
-                        )}
-                      </td>
-                      <td>
-                        {card.isEditing ? (
-                          <input
-                            type="text"
-                            value={card.skill_name}
-                            onChange={(event) => updateCardField(card.local_id, 'skill_name', event.target.value)}
-                            placeholder="Skill name"
-                          />
-                        ) : (
-                          <div className="skills-readonly-cell">{card.skill_name || '-'}</div>
-                        )}
-                      </td>
-                      <td>
-                        {card.isEditing ? (
-                          <input
-                            type="text"
-                            value={card.importance_level || ''}
-                            onChange={(event) => updateCardField(card.local_id, 'importance_level', event.target.value)}
-                            placeholder="Optional"
-                          />
-                        ) : (
-                          <div className="skills-readonly-cell">{card.importance_level || '-'}</div>
-                        )}
-                      </td>
-                      <td>
-                        {card.isEditing ? (
-                          <input
-                            type="text"
-                            value={card.subtopics_text}
-                            onChange={(event) => updateCardField(card.local_id, 'subtopics_text', event.target.value)}
-                            placeholder="Node.js, Express, API Design"
-                          />
-                        ) : (
-                          <div className="skills-readonly-cell">{card.subtopics_text || '-'}</div>
-                        )}
-                      </td>
-                      <td className="skills-actions-cell">
+                    <td className="px-5 py-3">
+                      {card.isEditing ? (
+                        <input
+                          type="text"
+                          value={card.skill_name}
+                          onChange={(event) => updateCardField(card.local_id, 'skill_name', event.target.value)}
+                          placeholder="Skill name"
+                          className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-[140px]"
+                        />
+                      ) : (
+                        <div className="text-sm text-slate-800 font-medium whitespace-nowrap overflow-hidden text-ellipsis">{card.skill_name || '-'}</div>
+                      )}
+                    </td>
+                    <td className="px-5 py-3 w-[130px]">
+                      {card.isEditing ? (
+                        <input
+                          type="text"
+                          value={card.importance_level || ''}
+                          onChange={(event) => updateCardField(card.local_id, 'importance_level', event.target.value)}
+                          placeholder="Optional"
+                          className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-[100px]"
+                        />
+                      ) : (
+                        <div className="text-sm text-slate-600">{card.importance_level || '-'}</div>
+                      )}
+                    </td>
+                    <td className="px-5 py-3">
+                      {card.isEditing ? (
+                        <input
+                          type="text"
+                          value={card.subtopics_text}
+                          onChange={(event) => updateCardField(card.local_id, 'subtopics_text', event.target.value)}
+                          placeholder="Node.js, Express, API Design"
+                          className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-[200px]"
+                        />
+                      ) : (
+                        <div className="text-sm text-slate-600 whitespace-nowrap overflow-hidden text-ellipsis">{card.subtopics_text || '-'}</div>
+                      )}
+                    </td>
+                    <td className="px-5 py-3 w-[180px]">
+                      <div className="flex items-center gap-1.5">
                         {card.isEditing ? (
                           <>
                             <button
-                              className="btn btn-primary table-action-btn"
-                              onClick={() => handleSaveCard(card.local_id)}
                               type="button"
+                              onClick={() => handleSaveCard(card.local_id)}
                               disabled={savingRowId === card.local_id}
+                              className="text-xs bg-[#02c0fa] hover:bg-[#00a8e0] text-white px-2.5 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
                             >
-                              {savingRowId === card.local_id ? 'Saving...' : 'Save'}
+                              {savingRowId === card.local_id ? (
+                                <><span className="w-3 h-3 border border-white/40 border-t-white rounded-full spin" />Saving...</>
+                              ) : 'Save'}
                             </button>
                             <button
-                              className="btn table-action-btn"
-                              onClick={() => handleCancelEdit(card.local_id)}
                               type="button"
+                              onClick={() => handleCancelEdit(card.local_id)}
+                              className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
                             >
                               Cancel
                             </button>
                           </>
                         ) : (
                           <button
-                            className="btn table-action-btn"
-                            onClick={() => handleEditCard(card.local_id)}
                             type="button"
+                            onClick={() => handleEditCard(card.local_id)}
+                            className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
                           >
                             Edit
                           </button>
                         )}
                         <button
-                          className="btn btn-danger table-action-btn"
-                          onClick={() => handleDeleteCard(card.local_id)}
                           type="button"
+                          onClick={() => handleDeleteCard(card.local_id)}
+                          className="text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
                         >
                           Delete
                         </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="topbar-actions skill-panel-footer">
-            <button className="btn" onClick={handleAddManualSkill} type="button">
-              Add Skill Manually
-            </button>
-          </div>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
-      </div>
+
+        <div className="pt-4 mt-2 border-t border-slate-100">
+          <SecondaryBtn onClick={handleAddManualSkill}>
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            Add Skill Manually
+          </SecondaryBtn>
+        </div>
+      </Card>
     </AppShell>
   )
 }
