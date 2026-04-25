@@ -28,16 +28,6 @@ services:
     restart: unless-stopped
     networks:
       - iaas-net
-
-  phpmyadmin:
-    image: phpmyadmin/phpmyadmin
-    container_name: phpmyadmin
-    restart: unless-stopped
-    environment:
-      PMA_HOST: iaas-db
-      PMA_PORT: 3306
-    networks:
-      - iaas-net
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: iaas
@@ -50,6 +40,16 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: iaas-db
+      PMA_PORT: 3306
+    networks:
+      - iaas-net
 
   nginx-proxy-manager:
     image: jc21/nginx-proxy-manager:latest
