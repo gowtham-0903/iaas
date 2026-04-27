@@ -37,6 +37,7 @@ ALLOWED_RECRUITER_AND_ABOVE = {
     UserRole.M_RECRUITER.value,
     UserRole.QC.value,
     UserRole.ADMIN.value,
+    UserRole.PANELIST.value,
 }
 
 # JD creation requires SR_RECRUITER or above (RECRUITER is view-only per ROLES_AND_ACCESS.md)

@@ -135,7 +135,7 @@ def list_clients():
     if user is None:
         return jsonify({"message": "User not found"}), 404
 
-    if role in {UserRole.ADMIN.value, UserRole.M_RECRUITER.value}:
+    if role in {UserRole.ADMIN.value, UserRole.M_RECRUITER.value, UserRole.PANELIST.value}:
         clients = Client.query.order_by(Client.name.asc()).all()
         return jsonify({"clients": _enrich_clients_with_metrics(clients)}), 200
 

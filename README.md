@@ -61,9 +61,8 @@ Default seeded admin:
 
 8. Start the backend server:
 
-```bash
-python -m flask run --host 127.0.0.1 --port 5001
-```
+cd /Users/gowtham/Adroit/Projects/iaas/iaas-backend
+venv/bin/python -m flask run --host 127.0.0.1 --port 5001
 
 The backend will run at `http://127.0.0.1:5001`.
 

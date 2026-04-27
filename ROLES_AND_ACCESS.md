@@ -1,7 +1,7 @@
 # IAAS System - Roles & Access Control Guide
 
 ## Overview
-The Interview Assessment System (IAAS) has 7 distinct user roles with hierarchical permissions. This document outlines each role and their access levels.
+The Interview Assessment System (IAAS) has 8 distinct user roles with hierarchical permissions. This document outlines each role and their access levels.
 
 ---
 
@@ -115,6 +115,19 @@ The Interview Assessment System (IAAS) has 7 distinct user roles with hierarchic
 
 ---
 
+### 8. **OPERATOR** - Client Operations Coordinator
+**Access Level:** Client-Scoped Interview Operations
+- ✅ Can view candidates assigned to their client
+- ✅ Can view job descriptions assigned to their client
+- ✅ Schedules interviews by assigning panelists and time slots
+- ❌ Cannot create job descriptions
+- ❌ Cannot manage users
+- ❌ Cannot see other clients' data
+
+**Use Case:** Client-side coordinators managing interview logistics
+
+---
+
 ## User Creation Hierarchy & Client Mapping Rules
 
 - Roles **M_RECRUITER**, **SR_RECRUITER**, and **RECRUITER** must be created with a valid `client_id`.
@@ -126,19 +139,19 @@ The Interview Assessment System (IAAS) has 7 distinct user roles with hierarchic
 
 ## Feature Access Table
 
-| Feature | ADMIN | M_RECRUITER | SR_RECRUITER | RECRUITER | PANELIST | QC | CLIENT |
-|---------|:-----:|:-----------:|:----:|:---------:|:--------:|:--:|:------:|
-| **User Management** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Create Users** | ✅ | ⚠️ Limited | ⚠️ Limited | ❌ | ❌ | ❌ | ❌ |
-| **System Settings** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Create JD** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Manage Candidates** | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ⚠️ Limited |
-| **Schedule Interviews** | ✅ | ✅ | ✅ | ⚠️ Limited | ❌ | ❌ | ❌ |
-| **Conduct Interviews** | ✅ | ✅ | ⚠️ Limited | ❌ | ✅ | ❌ | ❌ |
-| **Provide Feedback** | ✅ | ✅ | ⚠️ Limited | ✅ | ✅ | ❌ | ❌ |
-| **View Reports** | ✅ | ✅ | ✅ | ⚠️ Limited | ⚠️ Limited | ✅ | ⚠️ Limited |
-| **Audit/QC** | ✅ | ⚠️ Limited | ❌ | ❌ | ❌ | ✅ | ❌ |
-| **Export Data** | ✅ | ✅ | ✅ | ⚠️ Limited | ❌ | ✅ | ⚠️ Limited |
+| Feature | ADMIN | M_RECRUITER | SR_RECRUITER | RECRUITER | PANELIST | QC | CLIENT | OPERATOR |
+|---------|:-----:|:-----------:|:------------:|:---------:|:--------:|:--:|:------:|:--------:|
+| **User Management** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Create Users** | ✅ | ⚠️ Limited | ⚠️ Limited | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **System Settings** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Create JD** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Manage Candidates** | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ⚠️ Limited | ⚠️ Limited |
+| **Schedule Interviews** | ✅ | ✅ | ✅ | ⚠️ Limited | ❌ | ❌ | ❌ | ✅ |
+| **Conduct Interviews** | ✅ | ✅ | ⚠️ Limited | ❌ | ✅ | ❌ | ❌ | ❌ |
+| **Provide Feedback** | ✅ | ✅ | ⚠️ Limited | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **View Reports** | ✅ | ✅ | ✅ | ⚠️ Limited | ⚠️ Limited | ✅ | ⚠️ Limited | ⚠️ Limited |
+| **Audit/QC** | ✅ | ⚠️ Limited | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| **Export Data** | ✅ | ✅ | ✅ | ⚠️ Limited | ❌ | ✅ | ⚠️ Limited | ❌ |
 
 **Legend:** 
 - ✅ = Full Access

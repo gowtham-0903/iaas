@@ -13,3 +13,5 @@ cryptography==42.0.8
 PyMuPDF>=1.26.0,<1.28
 python-docx==1.1.2
 openai
+sendgrid
+pydantic==2.11.4

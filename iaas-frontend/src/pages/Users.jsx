@@ -11,9 +11,11 @@ import {
 import useAuthStore from '../store/authStore'
 
 const ROLES = [
+  'OPERATOR',
   'M_RECRUITER',
   'SR_RECRUITER',
   'RECRUITER',
+  'PANELIST',
 ]
 
 const ROLE_VARIANTS = {
@@ -24,6 +26,7 @@ const ROLE_VARIANTS = {
   PANELIST: 'amber',
   QC: 'amber',
   CLIENT: 'green',
+  OPERATOR: 'gray',
 }
 
 const DEFAULT_FORM = {

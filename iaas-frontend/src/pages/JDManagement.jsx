@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import useAuthStore from '../store/authStore'
 
 import { getClients } from '../api/clientsApi'
 import {
@@ -56,6 +57,8 @@ function getStatusSelectClasses(status) {
 
 export default function JDManagement() {
   const navigate = useNavigate()
+  const user = useAuthStore((state) => state.user)
+  const isPanelist = user?.role === 'PANELIST'
   const [jds, setJDs] = useState([])
   const [clients, setClients] = useState([])
   const [isLoading, setIsLoading] = useState(true)
@@ -244,12 +247,14 @@ export default function JDManagement() {
 
   return (
     <AppShell pageTitle="Job Descriptions" pageSubtitle="Create and manage job descriptions for clients">
-      <div className="flex items-center justify-between mb-5">
-        <div />
-        <PrimaryBtn onClick={openModal}>
-          + New JD
-        </PrimaryBtn>
-      </div>
+      {!isPanelist && (
+        <div className="flex items-center justify-between mb-5">
+          <div />
+          <PrimaryBtn onClick={openModal}>
+            + New JD
+          </PrimaryBtn>
+        </div>
+      )}
 
       <AlertBanner type="error" message={error} />
       <AlertBanner type="success" message={success} />
@@ -278,10 +283,10 @@ export default function JDManagement() {
                 <TableCell>
                   <select
                     value={jd.status}
-                    disabled={isStatusSavingId === jd.id}
+                    disabled={isStatusSavingId === jd.id || isPanelist}
                     onChange={(event) => handleStatusChange(jd.id, event.target.value)}
-                    title="Click to change status"
-                    className={`appearance-none cursor-pointer inline-flex items-center rounded-full border px-4 py-1 text-[11px] font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50 ${getStatusSelectClasses(jd.status)}`}
+                    title={isPanelist ? 'Only admins can change status' : 'Click to change status'}
+                    className={`appearance-none ${isPanelist ? 'cursor-default' : 'cursor-pointer'} inline-flex items-center rounded-full border px-4 py-1 text-[11px] font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50 ${getStatusSelectClasses(jd.status)}`}
                   >
                     {JD_STATUSES.map((status) => (
                       <option key={status} value={status}>{status}</option>
@@ -291,16 +296,18 @@ export default function JDManagement() {
                 <TableCell className="text-slate-500">{new Date(jd.created_at).toLocaleDateString()}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1.5 whitespace-nowrap">
-                    <button
-                      type="button"
-                      onClick={() => handleExtractSkills(jd.id)}
-                      disabled={isExtractingId === jd.id}
-                      className="text-xs bg-[#02c0fa] hover:bg-[#00a8e0] text-white px-2.5 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
-                    >
-                      {isExtractingId === jd.id ? (
-                        <><span className="w-3 h-3 border border-white/40 border-t-white rounded-full spin" />Extracting...</>
-                      ) : 'Extract Skills'}
-                    </button>
+                    {!isPanelist && (
+                      <button
+                        type="button"
+                        onClick={() => handleExtractSkills(jd.id)}
+                        disabled={isExtractingId === jd.id}
+                        className="text-xs bg-[#02c0fa] hover:bg-[#00a8e0] text-white px-2.5 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
+                      >
+                        {isExtractingId === jd.id ? (
+                          <><span className="w-3 h-3 border border-white/40 border-t-white rounded-full spin" />Extracting...</>
+                        ) : 'Extract Skills'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => navigate(`/skill-extraction/${jd.id}`)}

@@ -29,6 +29,10 @@ class Candidate(db.Model):
         nullable=False,
         default="APPLIED",
     )
+    resume_url = db.Column(db.String(500), nullable=True)
+    resume_filename = db.Column(db.String(255), nullable=True)
+    phone = db.Column(db.String(50), nullable=True)
+    ai_extracted = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     client = db.relationship("Client", back_populates="candidates", lazy=True)

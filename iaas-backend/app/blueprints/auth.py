@@ -25,6 +25,13 @@ def jwt_refresh_token_required(fn):
     return jwt_required(refresh=True)(fn)
 
 
+def _token_claims_for_user(user):
+    return {
+        "role": user.role,
+        "client_id": user.client_id,
+    }
+
+
 @auth_bp.post("/login")
 @limiter.limit("5 per minute")
 def login():
@@ -42,8 +49,8 @@ def login():
     if user is None or not user.check_password(password):
         return jsonify({"error": "Invalid credentials"}), 401
 
-    access_token = create_access_token(identity=str(user.id), additional_claims={"role": user.role})
-    refresh_token = create_refresh_token(identity=str(user.id), additional_claims={"role": user.role})
+    access_token = create_access_token(identity=str(user.id), additional_claims=_token_claims_for_user(user))
+    refresh_token = create_refresh_token(identity=str(user.id), additional_claims=_token_claims_for_user(user))
 
     response = jsonify({"user": user_schema.dump(user)})
     set_access_cookies(response, access_token)
@@ -59,7 +66,7 @@ def refresh():
     if user is None or not user.is_active:
         return jsonify({"error": "Invalid credentials"}), 401
 
-    access_token = create_access_token(identity=str(user.id), additional_claims={"role": user.role})
+    access_token = create_access_token(identity=str(user.id), additional_claims=_token_claims_for_user(user))
     response = jsonify({"message": "Token refreshed"})
     set_access_cookies(response, access_token)
     return response, 200

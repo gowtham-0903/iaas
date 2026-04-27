@@ -92,28 +92,14 @@ def list_users():
     if current_user is None:
         return jsonify({"message": "User not found"}), 404
 
-    if role == UserRole.ADMIN.value:
-        users = (
-            User.query.filter(User.id != current_user.id)
-            .order_by(User.full_name.asc())
-            .all()
-        )
-        return jsonify({"users": users_schema.dump(users)}), 200
-
-    if role in {UserRole.M_RECRUITER.value, UserRole.SR_RECRUITER.value}:
-        allowed_roles = [UserRole.RECRUITER.value]
-        if role == UserRole.M_RECRUITER.value:
-            allowed_roles.insert(0, UserRole.SR_RECRUITER.value)
-
-        users = (
-            User.query.filter(
-                User.client_id == current_user.client_id,
-                User.id != current_user.id,
-                User.role.in_(allowed_roles),
-            )
-            .order_by(User.full_name.asc())
-            .all()
-        )
+    if role in {UserRole.ADMIN.value, UserRole.M_RECRUITER.value, UserRole.SR_RECRUITER.value, UserRole.PANELIST.value}:
+        query = User.query.filter(User.id != current_user.id)
+        
+        if role != UserRole.ADMIN.value and role != UserRole.PANELIST.value:
+            # Recruiters see users in their own client
+            query = query.filter(User.client_id == current_user.client_id)
+            
+        users = query.order_by(User.full_name.asc()).all()
         return jsonify({"users": users_schema.dump(users)}), 200
 
     return jsonify({"message": "Forbidden"}), 403
