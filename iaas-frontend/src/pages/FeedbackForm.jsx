@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import AppShell from '../components/AppShell'
 import { Card, CardTitle } from '../components/ui'
+import useAuthStore from '../store/authStore'
 
 const initialScores = {
   react: 4,
@@ -41,9 +43,17 @@ function ScoreSlider({ label, value, onChange }) {
 }
 
 export default function FeedbackForm() {
+  const navigate = useNavigate()
+  const userRole = useAuthStore((state) => state.user?.role)
   const [scores, setScores] = useState(initialScores)
   const [recommendation, setRecommendation] = useState('Strong Hire')
   const [comments, setComments] = useState('')
+
+  useEffect(() => {
+    if (userRole === 'PANELIST') {
+      navigate('/slots', { replace: true })
+    }
+  }, [navigate, userRole])
 
   function updateScore(key, value) {
     setScores((current) => ({ ...current, [key]: Number(value) }))

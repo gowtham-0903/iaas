@@ -33,6 +33,7 @@ const PIPELINE_SEGMENT_STYLES = {
   scheduled: 'bg-blue-500',
   completed: 'bg-emerald-500',
   cancelled: 'bg-red-500',
+  overdue: 'bg-orange-500',
 }
 
 function StatCard({ label, value, tone = 'text-slate-900' }) {
@@ -118,6 +119,7 @@ export default function ClientDashboard() {
     return {
       interviewsScheduled: jdSummary.reduce((sum, item) => sum + (item.interviews_scheduled || 0), 0),
       interviewsCompleted: jdSummary.reduce((sum, item) => sum + (item.interviews_completed || 0), 0),
+      interviewsOverdue: jdSummary.reduce((sum, item) => sum + (item.interviews_overdue || 0), 0),
     }
   }, [dashboardData])
 
@@ -279,11 +281,12 @@ export default function ClientDashboard() {
         </Card>
       ) : activeTab === TAB_OVERVIEW ? (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4 mb-5">
             <StatCard label="Total JDs" value={dashboardData?.overall?.total_jds ?? 0} tone="text-blue-600" />
             <StatCard label="Total Candidates" value={dashboardData?.overall?.total_candidates ?? 0} />
             <StatCard label="Interviews Scheduled" value={summaryStats.interviewsScheduled} tone="text-blue-600" />
             <StatCard label="Interviews Completed" value={summaryStats.interviewsCompleted} tone="text-emerald-600" />
+            <StatCard label="Overdue / No Show" value={summaryStats.interviewsOverdue} tone="text-red-600" />
             <StatCard label="Selected Candidates" value={dashboardData?.overall?.total_selected ?? 0} tone="text-emerald-600" />
           </div>
 
@@ -293,10 +296,16 @@ export default function ClientDashboard() {
             </Card>
           ) : (
             (dashboardData?.jd_summary || []).map((jd) => {
-              const totalPipeline = (jd.interviews_scheduled || 0) + (jd.interviews_completed || 0) + (jd.interviews_cancelled || 0)
-              const scheduledPct = totalPipeline ? ((jd.interviews_scheduled || 0) / totalPipeline) * 100 : 0
+              const overdueCount = jd.interviews_overdue || 0
+              const scheduledCount = Math.max((jd.interviews_scheduled || 0) - overdueCount, 0)
+              const completedCount = jd.interviews_completed || 0
+              const cancelledCount = jd.interviews_cancelled || 0
+
+              const totalPipeline = scheduledCount + completedCount + cancelledCount + overdueCount
+              const scheduledPct = totalPipeline ? (scheduledCount / totalPipeline) * 100 : 0
               const completedPct = totalPipeline ? ((jd.interviews_completed || 0) / totalPipeline) * 100 : 0
               const cancelledPct = totalPipeline ? ((jd.interviews_cancelled || 0) / totalPipeline) * 100 : 0
+              const overduePct = totalPipeline ? (overdueCount / totalPipeline) * 100 : 0
               const hasApprovedResults = (resultsByJd.get(jd.jd_id)?.results || []).length > 0
 
               return (
@@ -312,11 +321,13 @@ export default function ClientDashboard() {
                           <div className={PIPELINE_SEGMENT_STYLES.scheduled} style={{ width: `${scheduledPct}%` }} />
                           <div className={PIPELINE_SEGMENT_STYLES.completed} style={{ width: `${completedPct}%` }} />
                           <div className={PIPELINE_SEGMENT_STYLES.cancelled} style={{ width: `${cancelledPct}%` }} />
+                          <div className={PIPELINE_SEGMENT_STYLES.overdue} style={{ width: `${overduePct}%` }} />
                         </div>
                         <div className="flex flex-wrap gap-4 mt-2 text-xs text-slate-500">
-                          <span>Scheduled: {jd.interviews_scheduled || 0}</span>
-                          <span>Completed: {jd.interviews_completed || 0}</span>
-                          <span>Cancelled: {jd.interviews_cancelled || 0}</span>
+                          <span>Scheduled: {scheduledCount}</span>
+                          <span>Completed: {completedCount}</span>
+                          <span>Cancelled: {cancelledCount}</span>
+                          <span>Overdue: {overdueCount}</span>
                         </div>
                       </div>
                     </div>

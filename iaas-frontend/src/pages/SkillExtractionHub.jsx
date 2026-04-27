@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import useAuthStore from '../store/authStore'
 
 import { getClients } from '../api/clientsApi'
 import { createJD, getJDs, uploadJDFile } from '../api/jdApi'
@@ -16,6 +17,17 @@ const DEFAULT_FORM = {
   raw_text: '',
 }
 
+function getDefaultForm(user) {
+  if (user?.role !== 'ADMIN' && user?.client_id != null) {
+    return {
+      ...DEFAULT_FORM,
+      client_id: String(user.client_id),
+    }
+  }
+
+  return { ...DEFAULT_FORM }
+}
+
 function getStatusVariant(status) {
   if (status === 'ACTIVE') return 'green'
   if (status === 'CLOSED') return 'red'
@@ -24,13 +36,15 @@ function getStatusVariant(status) {
 
 export default function SkillExtractionHub() {
   const navigate = useNavigate()
+  const user = useAuthStore((state) => state.user)
+  const isAdmin = user?.role === 'ADMIN'
   const [clients, setClients] = useState([])
   const [jds, setJds] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [formMode, setFormMode] = useState('paste')
   const [selectedFile, setSelectedFile] = useState(null)
-  const [formData, setFormData] = useState(DEFAULT_FORM)
+  const [formData, setFormData] = useState(() => getDefaultForm(user))
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
@@ -72,8 +86,19 @@ export default function SkillExtractionHub() {
     }
   }, [])
 
+  useEffect(() => {
+    if (isAdmin) {
+      return
+    }
+
+    setFormData((previous) => ({
+      ...previous,
+      client_id: user?.client_id != null ? String(user.client_id) : '',
+    }))
+  }, [isAdmin, user?.client_id])
+
   function resetForm() {
-    setFormData(DEFAULT_FORM)
+    setFormData(getDefaultForm(user))
     setFormMode('paste')
     setSelectedFile(null)
   }
@@ -81,7 +106,11 @@ export default function SkillExtractionHub() {
   async function handleCreateOpening(event) {
     event.preventDefault()
 
-    if (!formData.title.trim() || !formData.client_id) {
+    const selectedClientId = isAdmin
+      ? formData.client_id
+      : (user?.client_id != null ? String(user.client_id) : '')
+
+    if (!formData.title.trim() || !selectedClientId) {
       setError('Title and client are required.')
       return
     }
@@ -98,7 +127,7 @@ export default function SkillExtractionHub() {
 
       const createPayload = {
         title: formData.title.trim(),
-        client_id: Number(formData.client_id),
+        client_id: Number(selectedClientId),
         raw_text: formMode === 'paste' ? (formData.raw_text || '').trim() : null,
       }
 
@@ -152,20 +181,22 @@ export default function SkillExtractionHub() {
                 />
               </FormField>
 
-              <FormField label="Client" htmlFor="se-client">
-                <FormSelect
-                  id="se-client"
-                  name="client_id"
-                  value={formData.client_id}
-                  onChange={(event) => setFormData((prev) => ({ ...prev, client_id: event.target.value }))}
-                  required
-                >
-                  <option value="">Select client</option>
-                  {clients.map((client) => (
-                    <option key={client.id} value={client.id}>{client.name}</option>
-                  ))}
-                </FormSelect>
-              </FormField>
+              {isAdmin && (
+                <FormField label="Client" htmlFor="se-client">
+                  <FormSelect
+                    id="se-client"
+                    name="client_id"
+                    value={formData.client_id}
+                    onChange={(event) => setFormData((prev) => ({ ...prev, client_id: event.target.value }))}
+                    required
+                  >
+                    <option value="">Select client</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>{client.name}</option>
+                    ))}
+                  </FormSelect>
+                </FormField>
+              )}
 
               {/* Mode toggle */}
               <div className="mb-4">

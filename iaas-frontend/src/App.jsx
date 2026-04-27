@@ -24,6 +24,14 @@ function DashboardEntry() {
   return <Dashboard />
 }
 
+function FeedbackEntry() {
+  const userRole = useAuthStore((state) => state.user?.role)
+  if (userRole === 'PANELIST') {
+    return <Navigate to="/slots" replace />
+  }
+  return <FeedbackForm />
+}
+
 export default function App() {
   return (
     <BrowserRouter
@@ -42,7 +50,7 @@ export default function App() {
           <Route path="/interviews" element={<Interviews />} />
           <Route path="/jd" element={<JDManagement />} />
           <Route path="/candidates" element={<Candidates />} />
-          <Route path="/feedback" element={<FeedbackForm />} />
+          <Route path="/feedback" element={<FeedbackEntry />} />
           <Route path="/qc" element={<ProtectedRoute allowedRoles={['QC', 'ADMIN']}><QCReview /></ProtectedRoute>} />
           <Route path="/report" element={<ScoreReport />} />
           <Route path="/users" element={<Users />} />

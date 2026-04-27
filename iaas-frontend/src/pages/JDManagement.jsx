@@ -26,6 +26,17 @@ const DEFAULT_FORM = {
   raw_text: '',
 }
 
+function getDefaultForm(user) {
+  if (user?.role !== 'ADMIN' && user?.client_id != null) {
+    return {
+      ...DEFAULT_FORM,
+      client_id: String(user.client_id),
+    }
+  }
+
+  return { ...DEFAULT_FORM }
+}
+
 function ViewIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
@@ -58,6 +69,7 @@ function getStatusSelectClasses(status) {
 export default function JDManagement() {
   const navigate = useNavigate()
   const user = useAuthStore((state) => state.user)
+  const isAdmin = user?.role === 'ADMIN'
   const isPanelist = user?.role === 'PANELIST'
   const [jds, setJDs] = useState([])
   const [clients, setClients] = useState([])
@@ -70,7 +82,7 @@ export default function JDManagement() {
   const [success, setSuccess] = useState('')
   const [formMode, setFormMode] = useState('paste')
   const [selectedFile, setSelectedFile] = useState(null)
-  const [formData, setFormData] = useState(DEFAULT_FORM)
+  const [formData, setFormData] = useState(() => getDefaultForm(user))
 
   const clientMap = useMemo(() => {
     return new Map(clients.map((client) => [client.id, client.name]))
@@ -113,8 +125,19 @@ export default function JDManagement() {
     }
   }, [])
 
+  useEffect(() => {
+    if (isAdmin) {
+      return
+    }
+
+    setFormData((previous) => ({
+      ...previous,
+      client_id: user?.client_id != null ? String(user.client_id) : '',
+    }))
+  }, [isAdmin, user?.client_id])
+
   function resetForm() {
-    setFormData(DEFAULT_FORM)
+    setFormData(getDefaultForm(user))
     setFormMode('paste')
     setSelectedFile(null)
   }
@@ -147,7 +170,11 @@ export default function JDManagement() {
   async function handleCreateJD(event) {
     event.preventDefault()
 
-    if (!formData.title.trim() || !formData.client_id) {
+    const selectedClientId = isAdmin
+      ? formData.client_id
+      : (user?.client_id != null ? String(user.client_id) : '')
+
+    if (!formData.title.trim() || !selectedClientId) {
       setError('Title and client are required.')
       return
     }
@@ -164,7 +191,7 @@ export default function JDManagement() {
 
       const createPayload = {
         title: formData.title.trim(),
-        client_id: Number(formData.client_id),
+        client_id: Number(selectedClientId),
         raw_text: formMode === 'paste' ? formData.raw_text.trim() : null,
       }
 
@@ -367,20 +394,22 @@ export default function JDManagement() {
                 />
               </FormField>
 
-              <FormField label="Client" htmlFor="jd-client">
-                <FormSelect
-                  id="jd-client"
-                  name="client_id"
-                  value={formData.client_id}
-                  onChange={handleFieldChange}
-                  required
-                >
-                  <option value="">Select client</option>
-                  {clients.map((client) => (
-                    <option key={client.id} value={client.id}>{client.name}</option>
-                  ))}
-                </FormSelect>
-              </FormField>
+              {isAdmin && (
+                <FormField label="Client" htmlFor="jd-client">
+                  <FormSelect
+                    id="jd-client"
+                    name="client_id"
+                    value={formData.client_id}
+                    onChange={handleFieldChange}
+                    required
+                  >
+                    <option value="">Select client</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>{client.name}</option>
+                    ))}
+                  </FormSelect>
+                </FormField>
+              )}
 
               {/* Mode toggle */}
               <div className="mb-4">

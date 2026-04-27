@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import { getCandidates } from '../api/candidatesApi'
+import { getClients } from '../api/clientsApi'
 import { getJDs } from '../api/jdApi'
 import { createInterview, getInterviews } from '../api/interviewsApi'
 import { getUsers } from '../api/usersApi'
+import useAuthStore from '../store/authStore'
 import AppShell from '../components/AppShell'
 import {
   AlertBanner,
@@ -56,16 +58,25 @@ function formatDateTime(value) {
 export default function Interviews() {
   const [searchParams] = useSearchParams()
   const preselectedCandidateId = searchParams.get('candidateId') || ''
+  const user = useAuthStore((state) => state.user)
+  const canViewPendingScheduling = ['OPERATOR', 'ADMIN'].includes(user?.role)
+  const scheduleFormRef = useRef(null)
 
   const [candidates, setCandidates] = useState([])
   const [jds, setJDs] = useState([])
+  const [clients, setClients] = useState([])
   const [panelists, setPanelists] = useState([])
   const [interviews, setInterviews] = useState([])
+  const [pendingSchedulingCandidates, setPendingSchedulingCandidates] = useState([])
   const [formData, setFormData] = useState({ ...DEFAULT_FORM, candidate_id: preselectedCandidateId })
   const [isLoading, setIsLoading] = useState(true)
+  const [isPendingSchedulingLoading, setIsPendingSchedulingLoading] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+
+  const jdMap = useMemo(() => new Map(jds.map((jd) => [String(jd.id), jd])), [jds])
+  const clientMap = useMemo(() => new Map(clients.map((client) => [String(client.id), client.name])), [clients])
 
   const selectedCandidate = useMemo(
     () => candidates.find((candidate) => String(candidate.id) === String(formData.candidate_id)),
@@ -80,9 +91,10 @@ export default function Interviews() {
         setIsLoading(true)
         setError('')
 
-        const [candidatesResponse, jdsResponse, usersResponse, interviewsResponse] = await Promise.all([
+        const [candidatesResponse, jdsResponse, clientsResponse, usersResponse, interviewsResponse] = await Promise.all([
           getCandidates(),
           getJDs(),
+          getClients(),
           getUsers(),
           getInterviews(),
         ])
@@ -91,15 +103,51 @@ export default function Interviews() {
 
         const nextCandidates = candidatesResponse.data?.candidates || []
         const nextJds = jdsResponse.data?.jds || []
+        const nextClients = clientsResponse.data?.clients || []
         const nextUsers = Array.isArray(usersResponse.data) ? usersResponse.data : usersResponse.data?.users || []
 
         setCandidates(nextCandidates)
         setJDs(nextJds)
+        setClients(nextClients)
         setPanelists(nextUsers.filter((user) => user.role === 'PANELIST'))
         setInterviews(interviewsResponse.data?.interviews || [])
+
+        if (canViewPendingScheduling) {
+          setIsPendingSchedulingLoading(true)
+
+          const shortlistedCandidates = nextCandidates.filter((candidate) => candidate.status === 'SHORTLISTED')
+          const interviewChecks = await Promise.all(
+            shortlistedCandidates.map(async (candidate) => {
+              try {
+                const response = await getInterviews({ candidate_id: candidate.id })
+                const candidateInterviews = response.data?.interviews || []
+                return {
+                  candidate,
+                  hasInterview: candidateInterviews.length > 0,
+                }
+              } catch (_candidateInterviewError) {
+                return {
+                  candidate,
+                  hasInterview: true,
+                }
+              }
+            }),
+          )
+
+          if (active) {
+            setPendingSchedulingCandidates(
+              interviewChecks
+                .filter((check) => !check.hasInterview)
+                .map((check) => check.candidate),
+            )
+          }
+        } else {
+          setPendingSchedulingCandidates([])
+        }
       } catch (_loadError) {
         if (active) setError('Failed to load interview scheduling data.')
       } finally {
+        if (active) setIsPendingSchedulingLoading(false)
         if (active) setIsLoading(false)
       }
     }
@@ -109,7 +157,7 @@ export default function Interviews() {
     return () => {
       active = false
     }
-  }, [])
+  }, [canViewPendingScheduling])
 
   useEffect(() => {
     if (!selectedCandidate) return
@@ -153,6 +201,11 @@ export default function Interviews() {
       })
 
       setInterviews((previous) => [response.data?.interview, ...previous].filter(Boolean))
+      if (canViewPendingScheduling) {
+        setPendingSchedulingCandidates((previous) => (
+          previous.filter((candidate) => String(candidate.id) !== String(formData.candidate_id))
+        ))
+      }
       setSuccess('Interview scheduled successfully.')
       setFormData({ ...DEFAULT_FORM, candidate_id: preselectedCandidateId, jd_id: selectedCandidate?.jd_id ? String(selectedCandidate.jd_id) : '' })
     } catch (submitError) {
@@ -162,12 +215,64 @@ export default function Interviews() {
     }
   }
 
+  function handleScheduleNow(candidate) {
+    setFormData((previous) => ({
+      ...previous,
+      candidate_id: String(candidate.id),
+      jd_id: String(candidate.jd_id || ''),
+    }))
+
+    scheduleFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   return (
     <AppShell pageTitle="Interviews" pageSubtitle="Schedule interviews and review upcoming sessions">
       <AlertBanner type="error" message={error} />
       <AlertBanner type="success" message={success} />
 
+      {canViewPendingScheduling && (
+        <Card>
+          <CardTitle>Pending Scheduling</CardTitle>
+          {isPendingSchedulingLoading ? (
+            <LoadingState label="Loading pending scheduling queue..." />
+          ) : pendingSchedulingCandidates.length === 0 ? (
+            <EmptyState message="No shortlisted candidates are pending scheduling" />
+          ) : (
+            <div className="space-y-3">
+              {pendingSchedulingCandidates.map((candidate) => {
+                const candidateJd = jdMap.get(String(candidate.jd_id))
+                const clientName =
+                  candidate.client_name ||
+                  clientMap.get(String(candidate.client_id || candidateJd?.client_id)) ||
+                  '—'
+
+                return (
+                  <div key={candidate.id} className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="text-sm font-semibold text-slate-900">{candidate.full_name || '—'}</div>
+                        <div className="text-sm text-slate-600">{candidate.email || '—'}</div>
+                        <div className="text-xs text-slate-500">
+                          JD: {candidate.jd_title || candidateJd?.title || '—'}
+                        </div>
+                        <div className="text-xs text-slate-500">Client: {clientName}</div>
+                      </div>
+                      <div>
+                        <PrimaryBtn onClick={() => handleScheduleNow(candidate)}>
+                          Schedule Now
+                        </PrimaryBtn>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </Card>
+      )}
+
       <Card>
+        <div ref={scheduleFormRef} />
         <CardTitle>Schedule Interview</CardTitle>
         {isLoading ? (
           <LoadingState label="Loading scheduling form..." />

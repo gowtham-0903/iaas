@@ -39,21 +39,30 @@ const DEFAULT_FORM = {
   status: 'APPLIED',
 }
 
+function getDefaultForm(clientId = '') {
+  return {
+    ...DEFAULT_FORM,
+    client_id: clientId,
+  }
+}
+
 export default function Candidates() {
   const [searchParams] = useSearchParams()
   const initialClientId = searchParams.get('clientId') || ''
   const navigate = useNavigate()
   const user = useAuthStore((state) => state.user)
   const isPanelist = user?.role === 'PANELIST'
+  const isRecruiterScopedRole = ['RECRUITER', 'SR_RECRUITER', 'M_RECRUITER'].includes(user?.role)
+  const recruiterClientId = isRecruiterScopedRole && user?.client_id != null ? String(user.client_id) : ''
 
   const [clients, setClients] = useState([])
   const [jds, setJDs] = useState([])
   const [candidates, setCandidates] = useState([])
-  const [selectedClientId, setSelectedClientId] = useState(initialClientId)
+  const [selectedClientId, setSelectedClientId] = useState(initialClientId || recruiterClientId)
   const [selectedJdId, setSelectedJdId] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [createStep, setCreateStep] = useState('form')
-  const [formData, setFormData] = useState({ ...DEFAULT_FORM, client_id: initialClientId })
+  const [formData, setFormData] = useState(() => getDefaultForm(initialClientId || recruiterClientId))
   const [createdCandidate, setCreatedCandidate] = useState(null)
   const [resumeFile, setResumeFile] = useState(null)
   const [resumeError, setResumeError] = useState('')
@@ -79,11 +88,22 @@ export default function Candidates() {
     return jds.filter((jd) => String(jd.client_id) === String(formData.client_id))
   }, [jds, formData.client_id])
 
+  useEffect(() => {
+    if (!isRecruiterScopedRole || !recruiterClientId) return
+
+    setSelectedClientId(recruiterClientId)
+    setFormData((previous) => ({
+      ...previous,
+      client_id: recruiterClientId,
+    }))
+  }, [isRecruiterScopedRole, recruiterClientId])
+
   async function loadData() {
     try {
       setIsLoading(true)
       setError('')
 
+      // For RECRUITER, backend list_jds already returns only assigned JDs.
       const [clientsResponse, jdsResponse] = await Promise.all([getClients(), getJDs()])
       const nextClients = clientsResponse.data?.clients ?? []
       const nextJds = jdsResponse.data?.jds ?? []
@@ -122,7 +142,7 @@ export default function Candidates() {
   }, [selectedClientId, selectedJdId])
 
   function resetForm() {
-    setFormData({ ...DEFAULT_FORM, client_id: selectedClientId || '' })
+    setFormData(getDefaultForm(isRecruiterScopedRole ? recruiterClientId : (selectedClientId || '')))
     setCreateStep('form')
     setCreatedCandidate(null)
     setResumeFile(null)
@@ -135,6 +155,12 @@ export default function Candidates() {
 
   async function handleCreateCandidate(event) {
     event.preventDefault()
+    const effectiveClientId = isRecruiterScopedRole ? recruiterClientId : formData.client_id
+
+    if (!effectiveClientId || !formData.jd_id) {
+      setError('Client and job description are required.')
+      return
+    }
 
     try {
       setIsSubmitting(true)
@@ -142,7 +168,7 @@ export default function Candidates() {
       setSuccess('')
 
       const createResponse = await createCandidate({
-        client_id: Number(formData.client_id),
+        client_id: Number(effectiveClientId),
         jd_id: Number(formData.jd_id),
         full_name: formData.full_name,
         email: formData.email,
@@ -324,7 +350,7 @@ export default function Candidates() {
             onClick={() => {
               setShowCreateForm((previous) => !previous)
               setCreateStep('form')
-              setFormData({ ...DEFAULT_FORM, client_id: selectedClientId || '' })
+              setFormData(getDefaultForm(isRecruiterScopedRole ? recruiterClientId : (selectedClientId || '')))
               setCreatedCandidate(null)
               setResumeFile(null)
               setResumeError('')
@@ -383,25 +409,27 @@ export default function Candidates() {
               <CardTitle>Create Candidate</CardTitle>
               <form onSubmit={handleCreateCandidate}>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <FormField label="Client" htmlFor="candidate_client_id">
-                    <FormSelect
-                      id="candidate_client_id"
-                      value={formData.client_id}
-                      onChange={(event) => {
-                        setFormData((previous) => ({
-                          ...previous,
-                          client_id: event.target.value,
-                          jd_id: '',
-                        }))
-                      }}
-                      required
-                    >
-                      <option value="">Select client</option>
-                      {clients.map((client) => (
-                        <option key={client.id} value={client.id}>{client.name}</option>
-                      ))}
-                    </FormSelect>
-                  </FormField>
+                  {!isRecruiterScopedRole && (
+                    <FormField label="Client" htmlFor="candidate_client_id">
+                      <FormSelect
+                        id="candidate_client_id"
+                        value={formData.client_id}
+                        onChange={(event) => {
+                          setFormData((previous) => ({
+                            ...previous,
+                            client_id: event.target.value,
+                            jd_id: '',
+                          }))
+                        }}
+                        required
+                      >
+                        <option value="">Select client</option>
+                        {clients.map((client) => (
+                          <option key={client.id} value={client.id}>{client.name}</option>
+                        ))}
+                      </FormSelect>
+                    </FormField>
+                  )}
                   <FormField label="Job Description" htmlFor="candidate_jd_id">
                     <FormSelect
                       id="candidate_jd_id"

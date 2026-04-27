@@ -215,6 +215,12 @@ def get_dashboard():
                 COUNT(DISTINCT CASE WHEN s.status = 'SCHEDULED' THEN s.id END) AS interviews_scheduled,
                 COUNT(DISTINCT CASE WHEN s.status = 'COMPLETED' THEN s.id END) AS interviews_completed,
                 COUNT(DISTINCT CASE WHEN s.status = 'CANCELLED' THEN s.id END) AS interviews_cancelled,
+                COUNT(
+                    DISTINCT CASE
+                        WHEN s.status = 'SCHEDULED' AND s.scheduled_at < NOW()
+                        THEN s.id
+                    END
+                ) AS interviews_overdue,
                 COUNT(DISTINCT CASE WHEN c.status = 'SELECTED' THEN c.id END) AS selected,
                 COUNT(DISTINCT CASE WHEN c.status = 'NOT_SELECTED' THEN c.id END) AS not_selected,
                 COUNT(
@@ -270,9 +276,11 @@ def get_dashboard():
                     "interviews_scheduled": int(row["interviews_scheduled"] or 0),
                     "interviews_completed": int(row["interviews_completed"] or 0),
                     "interviews_cancelled": int(row["interviews_cancelled"] or 0),
+                    "interviews_overdue": int(row["interviews_overdue"] or 0),
+                    "interviews_not_completed": int(row["interviews_overdue"] or 0),
                     "selected": int(row["selected"] or 0),
                     "not_selected": int(row["not_selected"] or 0),
-                    "pending_results": int(row["pending_results"] or 0),
+                    "results_pending_validation": int(row["pending_results"] or 0),
                 }
                 for row in jd_rows
             ],
