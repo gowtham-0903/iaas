@@ -29,6 +29,8 @@ class Candidate(db.Model):
         nullable=False,
         default="APPLIED",
     )
+    status_updated_at = db.Column(db.DateTime, nullable=True)
+    candidate_extracted_skills = db.Column(db.JSON, nullable=True)
     resume_url = db.Column(db.String(500), nullable=True)
     resume_filename = db.Column(db.String(255), nullable=True)
     phone = db.Column(db.String(50), nullable=True)

@@ -10,6 +10,7 @@ import {
   getCandidates,
   updateCandidate,
   uploadResume,
+  bulkUploadResumes,
 } from '../api/candidatesApi'
 import { getClients } from '../api/clientsApi'
 import { getInterviews } from '../api/interviewsApi'
@@ -74,6 +75,16 @@ export default function Candidates() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [interviewCounts, setInterviewCounts] = useState({})
+  
+  // Bulk upload state
+  const [showBulkUpload, setShowBulkUpload] = useState(false)
+  const [bulkUploadJdId, setBulkUploadJdId] = useState('')
+  const [bulkUploadClientId, setBulkUploadClientId] = useState(isRecruiterScopedRole ? recruiterClientId : '')
+  const [bulkUploadFiles, setBulkUploadFiles] = useState([])
+  const [bulkUploadErrors, setBulkUploadErrors] = useState({})
+  const [bulkUploadResults, setBulkUploadResults] = useState(null)
+  const [bulkUploadProcessing, setBulkUploadProcessing] = useState(false)
+  const [bulkUploadProgress, setBulkUploadProgress] = useState(0)
 
   const jdMap = useMemo(() => new Map(jds.map((jd) => [jd.id, jd])), [jds])
   const clientMap = useMemo(() => new Map(clients.map((client) => [client.id, client.name])), [clients])
@@ -87,6 +98,19 @@ export default function Candidates() {
     if (!formData.client_id) return []
     return jds.filter((jd) => String(jd.client_id) === String(formData.client_id))
   }, [jds, formData.client_id])
+
+  const bulkUploadJdsForForm = useMemo(() => {
+    if (isRecruiterScopedRole) {
+      // RECRUITER: backend already filtered to assigned JDs, filter by their client
+      if (!recruiterClientId) return []
+      return jds.filter((jd) => String(jd.client_id) === String(recruiterClientId))
+    }
+    if (bulkUploadClientId) {
+      // SR_RECRUITER/M_RECRUITER/ADMIN: filter by selected client
+      return jds.filter((jd) => String(jd.client_id) === String(bulkUploadClientId))
+    }
+    return []
+  }, [jds, isRecruiterScopedRole, recruiterClientId, bulkUploadClientId])
 
   useEffect(() => {
     if (!isRecruiterScopedRole || !recruiterClientId) return
@@ -341,27 +365,115 @@ export default function Candidates() {
     }
   }
 
+  function handleBulkUploadFileChange(event) {
+    const newFiles = Array.from(event.target.files || [])
+    const MAX_FILE_SIZE = 2 * 1024 * 1024 // 2MB
+    const errors = {}
+
+    newFiles.forEach((file) => {
+      if (file.size > MAX_FILE_SIZE) {
+        errors[file.name] = `File size exceeds 2MB limit (${(file.size / (1024 * 1024)).toFixed(2)}MB)`
+      }
+    })
+
+    setBulkUploadErrors(errors)
+    
+    // Only add files without errors
+    const validFiles = newFiles.filter((file) => !errors[file.name])
+    
+    if (validFiles.length + bulkUploadFiles.length > 20) {
+      setError('Maximum 20 files per upload')
+      return
+    }
+
+    setBulkUploadFiles((previous) => [...previous, ...validFiles])
+    setError('')
+  }
+
+  function handleBulkUploadRemoveFile(fileName) {
+    setBulkUploadFiles((previous) => previous.filter((file) => file.name !== fileName))
+    setBulkUploadErrors((previous) => {
+      const next = { ...previous }
+      delete next[fileName]
+      return next
+    })
+  }
+
+  function handleBulkUploadClose() {
+    setShowBulkUpload(false)
+    setBulkUploadJdId('')
+    setBulkUploadClientId(isRecruiterScopedRole ? recruiterClientId : '')
+    setBulkUploadFiles([])
+    setBulkUploadErrors({})
+    setBulkUploadResults(null)
+    setBulkUploadProcessing(false)
+    setBulkUploadProgress(0)
+  }
+
+  async function handleBulkUploadSubmit() {
+    if (!bulkUploadJdId || bulkUploadFiles.length === 0) {
+      setError('JD and at least one file are required')
+      return
+    }
+
+    setBulkUploadProcessing(true)
+    setBulkUploadProgress(0)
+    setError('')
+
+    try {
+      const response = await bulkUploadResumes(
+        Number(bulkUploadJdId),
+        Number(bulkUploadClientId || selectedClientId),
+        bulkUploadFiles,
+      )
+
+      const results = response.data?.results || []
+      setBulkUploadResults(results)
+      setBulkUploadFiles([])
+      
+      // Reload candidates
+      await loadData()
+    } catch (uploadError) {
+      setError(uploadError?.response?.data?.error || 'Failed to upload resumes')
+      setBulkUploadResults(null)
+    } finally {
+      setBulkUploadProcessing(false)
+    }
+  }
+
   return (
     <AppShell pageTitle="Candidates" pageSubtitle="Track and manage interview candidates">
       {!isPanelist && (
         <div className="flex items-center justify-between mb-5">
           <div />
-          <PrimaryBtn
-            onClick={() => {
-              setShowCreateForm((previous) => !previous)
-              setCreateStep('form')
-              setFormData(getDefaultForm(isRecruiterScopedRole ? recruiterClientId : (selectedClientId || '')))
-              setCreatedCandidate(null)
-              setResumeFile(null)
-              setResumeError('')
-              setShowExtractedEditor(false)
-              setExtractedForm({ full_name: '', email: '', phone: '' })
-              setError('')
-              setSuccess('')
-            }}
-          >
-            {showCreateForm ? 'Close' : '+ Add Candidate'}
-          </PrimaryBtn>
+          <div className="flex gap-2">
+            <PrimaryBtn
+              onClick={() => {
+                setShowBulkUpload((previous) => !previous)
+                if (showBulkUpload) {
+                  handleBulkUploadClose()
+                }
+              }}
+            >
+              {showBulkUpload ? 'Close' : 'Bulk Upload Resumes'}
+            </PrimaryBtn>
+            <PrimaryBtn
+              onClick={() => {
+                setShowCreateForm((previous) => !previous)
+                setCreateStep('form')
+                setFormData(getDefaultForm(isRecruiterScopedRole ? recruiterClientId : (selectedClientId || '')))
+                setCreatedCandidate(null)
+                setResumeFile(null)
+                setResumeError('')
+                setShowExtractedEditor(false)
+                setExtractedForm({ full_name: '', email: '', phone: '' })
+                setError('')
+                setSuccess('')
+              }}
+            >
+              {showCreateForm ? 'Close' : '+ Add Candidate'}
+            </PrimaryBtn>
+          </div>
         </div>
       )}
 
@@ -438,6 +550,9 @@ export default function Candidates() {
                       required
                     >
                       <option value="">Select JD</option>
+                      {jdsForForm.length === 0 && isRecruiterScopedRole ? (
+                        <option value="" disabled>No job descriptions assigned to you. Contact your manager.</option>
+                      ) : null}
                       {jdsForForm.map((jd) => (
                         <option key={jd.id} value={jd.id}>{jd.title}</option>
                       ))}
@@ -567,15 +682,227 @@ export default function Candidates() {
         </Card>
       )}
 
+      {/* Bulk upload panel */}
+      {showBulkUpload && (
+        <Card>
+          {!bulkUploadResults ? (
+            <>
+              <CardTitle>Bulk Upload Resumes</CardTitle>
+              <div className="space-y-4">
+                {/* Client selector (ADMIN only) */}
+                {!isRecruiterScopedRole && (
+                  <FormField label="Client" htmlFor="bulk_client_id">
+                    <FormSelect
+                      id="bulk_client_id"
+                      value={bulkUploadClientId}
+                      onChange={(event) => {
+                        setBulkUploadClientId(event.target.value)
+                        setBulkUploadJdId('')
+                      }}
+                      required
+                    >
+                      <option value="">Select client</option>
+                      {clients.map((client) => (
+                        <option key={client.id} value={client.id}>{client.name}</option>
+                      ))}
+                    </FormSelect>
+                  </FormField>
+                )}
+
+                {/* JD selector */}
+                <FormField label="Job Description" htmlFor="bulk_jd_id">
+                  <FormSelect
+                    id="bulk_jd_id"
+                    value={bulkUploadJdId}
+                    onChange={(event) => setBulkUploadJdId(event.target.value)}
+                    required
+                  >
+                    <option value="">Select JD</option>
+                    {bulkUploadJdsForForm.length === 0 && isRecruiterScopedRole ? (
+                      <option value="" disabled>No job descriptions assigned to you. Contact your manager.</option>
+                    ) : null}
+                    {bulkUploadJdsForForm.map((jd) => (
+                      <option key={jd.id} value={jd.id}>{jd.title}</option>
+                    ))}
+                  </FormSelect>
+                </FormField>
+
+                {/* File upload area */}
+                <FormField label="Resume Files" htmlFor="bulk_resumes">
+                  <div className="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center hover:border-blue-400 transition-colors">
+                    <input
+                      id="bulk_resumes"
+                      type="file"
+                      multiple
+                      accept=".pdf,.docx"
+                      onChange={handleBulkUploadFileChange}
+                      disabled={bulkUploadProcessing}
+                      className="hidden"
+                    />
+                    <label htmlFor="bulk_resumes" className="cursor-pointer">
+                      <svg className="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
+                      <p className="mt-2 text-sm font-medium text-slate-700">
+                        Click to select files or drag and drop
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1">PDF or DOCX, max 2MB per file, up to 20 files</p>
+                    </label>
+                  </div>
+                </FormField>
+
+                {/* Selected files list */}
+                {bulkUploadFiles.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-slate-700">{bulkUploadFiles.length} file(s) selected</p>
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {bulkUploadFiles.map((file) => (
+                        <div key={file.name} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-slate-900 truncate">{file.name}</p>
+                            <p className="text-xs text-slate-500">{(file.size / (1024 * 1024)).toFixed(2)} MB</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleBulkUploadRemoveFile(file.name)}
+                            className="ml-2 text-red-600 hover:text-red-700 font-bold"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* File errors */}
+                {Object.keys(bulkUploadErrors).length > 0 && (
+                  <AlertBanner type="error" message={`${Object.keys(bulkUploadErrors).length} file(s) exceed size limit`} />
+                )}
+
+                {/* Upload button */}
+                <div className="flex gap-2">
+                  <PrimaryBtn
+                    onClick={handleBulkUploadSubmit}
+                    loading={bulkUploadProcessing}
+                    disabled={!bulkUploadJdId || bulkUploadFiles.length === 0 || bulkUploadProcessing}
+                  >
+                    {bulkUploadProcessing ? 'Uploading & Extracting...' : 'Upload & Extract All'}
+                  </PrimaryBtn>
+                  <SecondaryBtn onClick={handleBulkUploadClose} disabled={bulkUploadProcessing}>
+                    Cancel
+                  </SecondaryBtn>
+                </div>
+
+                {/* Progress indicator */}
+                {bulkUploadProcessing && (
+                  <div className="flex items-center gap-2.5 text-sm text-slate-600 mt-4">
+                    <span className="w-4 h-4 border-2 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+                    Processing resumes...
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <CardTitle>Bulk Upload Results</CardTitle>
+              
+              {/* Results table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50">
+                      <th className="text-left px-4 py-3 font-semibold text-slate-700">File</th>
+                      <th className="text-left px-4 py-3 font-semibold text-slate-700">Status</th>
+                      <th className="text-left px-4 py-3 font-semibold text-slate-700">Name</th>
+                      <th className="text-left px-4 py-3 font-semibold text-slate-700">Email</th>
+                      <th className="text-left px-4 py-3 font-semibold text-slate-700">Phone</th>
+                      <th className="text-left px-4 py-3 font-semibold text-slate-700">Skills</th>
+                      <th className="text-left px-4 py-3 font-semibold text-slate-700">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bulkUploadResults.map((result, index) => (
+                      <tr key={index} className="border-b border-slate-200 hover:bg-slate-50">
+                        <td className="px-4 py-3 text-slate-700 font-medium">{result.filename}</td>
+                        <td className="px-4 py-3">
+                          <Badge variant={
+                            result.status === 'success' ? 'green' :
+                            result.status === 'failed' ? 'red' :
+                            'amber'
+                          }>
+                            {result.status === 'success' && 'Added'}
+                            {result.status === 'failed' && 'Parse Error'}
+                            {result.status === 'rejected' && 'Rejected'}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-3 text-slate-700">{result.extracted?.full_name || '—'}</td>
+                        <td className="px-4 py-3 text-slate-700">{result.extracted?.email || '—'}</td>
+                        <td className="px-4 py-3 text-slate-700">{result.extracted?.phone || '—'}</td>
+                        <td className="px-4 py-3 text-slate-700 text-xs">
+                          {result.extracted?.skills && result.extracted.skills.length > 0 
+                            ? result.extracted.skills.join(', ')
+                            : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-xs">
+                          {result.status === 'failed' && (
+                            <div className="text-red-600 font-medium">{result.error}</div>
+                          )}
+                          {result.status === 'rejected' && (
+                            <div className="text-amber-600 font-medium max-w-xs">{result.error}</div>
+                          )}
+                          {result.status === 'success' && (
+                            <span className="text-green-600 font-medium">Success</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Summary stats */}
+              <div className="mt-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
+                <div className="grid grid-cols-3 gap-4 text-center">
+                  <div>
+                    <p className="text-sm text-slate-500">Added</p>
+                    <p className="text-2xl font-semibold text-green-600">
+                      {bulkUploadResults.filter((r) => r.status === 'success').length}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-500">Rejected</p>
+                    <p className="text-2xl font-semibold text-amber-600">
+                      {bulkUploadResults.filter((r) => r.status === 'rejected').length}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-500">Errors</p>
+                    <p className="text-2xl font-semibold text-red-600">
+                      {bulkUploadResults.filter((r) => r.status === 'failed').length}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Done button */}
+              <div className="flex gap-2 mt-4">
+                <PrimaryBtn onClick={handleBulkUploadClose}>Done</PrimaryBtn>
+              </div>
+            </>
+          )}
+        </Card>
+      )}
+
       {/* Candidates table */}
       <Card>
         <DataTable
-          headers={['Name', 'Email', 'Phone', 'Client', 'Job Description', 'Status', 'Actions']}
+          headers={['Name', 'Email', 'Phone', 'Skills', 'Client', 'Job Description', 'Status', 'Actions']}
           loading={isLoading}
           loadingLabel="Loading candidates..."
         >
           {candidates.length === 0 && !isLoading ? (
-            <tr><td colSpan={7}><EmptyState message="No candidates found" /></td></tr>
+            <tr><td colSpan={8}><EmptyState message="No candidates found" /></td></tr>
           ) : (
             candidates.map((candidate) => (
               <TableRow key={candidate.id}>
@@ -590,6 +917,20 @@ export default function Candidates() {
                 </TableCell>
                 <TableCell className="text-slate-500">{candidate.email}</TableCell>
                 <TableCell className="text-slate-500">{candidate.phone || '—'}</TableCell>
+                <TableCell>
+                  {candidate.candidate_extracted_skills && candidate.candidate_extracted_skills.length > 0 ? (
+                    <div className="flex flex-wrap gap-2 items-center">
+                      {candidate.candidate_extracted_skills.slice(0, 3).map((skill, idx) => (
+                        <Badge key={idx} variant="gray">{skill}</Badge>
+                      ))}
+                      {candidate.candidate_extracted_skills.length > 3 && (
+                        <span className="text-xs text-slate-400">+{candidate.candidate_extracted_skills.length - 3} more</span>
+                      )}
+                    </div>
+                  ) : (
+                    '—'
+                  )}
+                </TableCell>
                 <TableCell>{clientMap.get(candidate.client_id) || `Client #${candidate.client_id}`}</TableCell>
                 <TableCell className="max-w-[180px]">
                   <div className="truncate text-slate-600">{jdMap.get(candidate.jd_id)?.title || `JD #${candidate.jd_id}`}</div>

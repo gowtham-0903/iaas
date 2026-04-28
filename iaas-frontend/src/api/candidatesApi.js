@@ -33,3 +33,13 @@ export function extractResume(candidateId) {
 export function downloadResume(candidateId) {
   return axiosInstance.get(`/api/candidates/${candidateId}/resume`, { responseType: 'blob' })
 }
+
+export function bulkUploadResumes(jdId, clientId, files) {
+  const formData = new FormData()
+  formData.append('jd_id', jdId)
+  formData.append('client_id', clientId)
+  files.forEach((file) => formData.append('resumes', file))
+  return axiosInstance.post('/api/candidates/bulk-upload-resumes', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}

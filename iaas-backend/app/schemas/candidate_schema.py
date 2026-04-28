@@ -11,6 +11,8 @@ class CandidateSchema(BaseSchema):
     full_name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     email = fields.Email(required=True, validate=validate.Length(max=255))
     status = fields.Str(validate=validate.OneOf(CANDIDATE_STATUSES), load_default="APPLIED")
+    status_updated_at = fields.DateTime(dump_only=True)
+    candidate_extracted_skills = fields.List(fields.Str(), dump_only=True)
     resume_url = fields.Str(dump_only=True)
     resume_filename = fields.Str(dump_only=True)
     phone = fields.Str(dump_only=True)

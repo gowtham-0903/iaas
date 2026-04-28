@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from flask import Blueprint, current_app, jsonify, request, send_file
@@ -14,6 +15,7 @@ from openai import OpenAI
 from app.extensions import db
 from app.models.candidate import Candidate, CANDIDATE_STATUSES
 from app.models.client import Client
+from app.models.jd_recruiter_assignment import JDRecruiterAssignment
 from app.models.job_description import JobDescription
 from app.models.user import User, UserRole
 from app.services.file_parser import extract_text_from_docx, extract_text_from_pdf
@@ -42,8 +44,8 @@ RESUME_MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 RESUME_ALLOWED_EXTENSIONS = {".pdf", ".docx"}
 RESUME_EXTRACT_SYSTEM_PROMPT = (
     "Extract candidate details from this resume. Return ONLY \n"
-    "valid JSON with keys: full_name, email, phone. If a field \n"
-    "cannot be found return null for that field."
+    "valid JSON with keys: full_name, email, phone, skills (array of skill name strings). \n"
+    "If a field cannot be found return null for that field."
 )
 
 
@@ -55,10 +57,25 @@ def _get_current_user() -> Optional[User]:
 
 
 def _can_access_client(role: str, user: Optional[User], client_id: int) -> bool:
-    if role in {UserRole.ADMIN.value, UserRole.M_RECRUITER.value, UserRole.SR_RECRUITER.value, UserRole.QC.value}:
+    if role == UserRole.ADMIN.value:
         return True
 
-    return role == UserRole.RECRUITER.value and user is not None and user.client_id == client_id
+    if role == UserRole.QC.value:
+        return True
+
+    # RECRUITER, SR_RECRUITER, M_RECRUITER: can only access their own client
+    if role in {UserRole.RECRUITER.value, UserRole.SR_RECRUITER.value, UserRole.M_RECRUITER.value}:
+        return user is not None and user.client_id == client_id
+
+    return False
+
+
+def _is_jd_assigned_to_recruiter(jd_id: int, recruiter_id: int) -> bool:
+    """Check if a JD is assigned to a recruiter via JDRecruiterAssignment."""
+    assignment = JDRecruiterAssignment.query.filter_by(
+        jd_id=jd_id, recruiter_id=recruiter_id
+    ).first()
+    return assignment is not None
 
 
 def _get_resume_upload_paths(candidate_id: int, original_filename: str):
@@ -114,6 +131,33 @@ def _extract_resume_fields_with_ai(resume_text: str):
     raise RuntimeError("Resume AI extraction failed after 3 attempts")
 
 
+def _check_cooling_period(email: str, jd_id: int):
+    """
+    Check if a candidate is in cooling period after NOT_SELECTED status.
+    
+    Returns:
+        (is_blocked: bool, unblock_date: str or None)
+        Blocked if a NOT_SELECTED candidate with this email+jd_id 
+        exists with status_updated_at within the last 30 days.
+    """
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
+    
+    candidate = Candidate.query.filter(
+        db.func.lower(Candidate.email) == email.lower().strip(),
+        Candidate.jd_id == jd_id,
+        Candidate.status == 'NOT_SELECTED',
+        Candidate.status_updated_at >= cutoff,
+    ).first()
+    
+    if candidate is None:
+        return False, None
+    
+    unblock_date = (
+        candidate.status_updated_at + timedelta(days=30)
+    ).strftime('%Y-%m-%d')
+    return True, unblock_date
+
+
 @candidates_bp.get("")
 @jwt_required()
 def list_candidates():
@@ -131,7 +175,8 @@ def list_candidates():
     jd_id = request.args.get("jd_id", type=int)
     status = request.args.get("status", type=str)
 
-    if role == UserRole.RECRUITER.value:
+    # RECRUITER, SR_RECRUITER, M_RECRUITER: only see candidates from their client
+    if role in {UserRole.RECRUITER.value, UserRole.SR_RECRUITER.value, UserRole.M_RECRUITER.value}:
         if user.client_id is None:
             return jsonify({"candidates": []}), 200
         query = query.filter(Candidate.client_id == user.client_id)
@@ -173,6 +218,12 @@ def create_candidate():
 
     client_id = validated["client_id"]
     jd_id = validated["jd_id"]
+    email = validated["email"]
+
+    # For non-ADMIN roles, enforce client_id match
+    if role != UserRole.ADMIN.value:
+        if user.client_id != client_id:
+            return jsonify({"message": "Forbidden"}), 403
 
     if not _can_access_client(role, user, client_id):
         return jsonify({"message": "Forbidden"}), 403
@@ -188,11 +239,22 @@ def create_candidate():
     if jd.client_id != client_id:
         return jsonify({"errors": {"jd_id": ["JD does not belong to this client."]}}), 400
 
+    # For RECRUITER role, check JD assignment
+    if role == UserRole.RECRUITER.value:
+        if not _is_jd_assigned_to_recruiter(jd_id, user.id):
+            return jsonify({"message": "JD not assigned to this recruiter"}), 403
+
+    # Check cooling period for recruiter roles
+    if role in {UserRole.RECRUITER.value, UserRole.SR_RECRUITER.value, UserRole.M_RECRUITER.value, UserRole.ADMIN.value}:
+        is_blocked, unblock_date = _check_cooling_period(email, jd_id)
+        if is_blocked:
+            return jsonify({"error": f"Candidate was not selected for this JD. Re-apply allowed after {unblock_date}."}), 409
+
     candidate = Candidate(
         client_id=client_id,
         jd_id=jd_id,
         full_name=validated["full_name"].strip(),
-        email=validated["email"].strip().lower(),
+        email=email.strip().lower(),
         status=validated.get("status", "APPLIED"),
     )
     db.session.add(candidate)
@@ -204,6 +266,245 @@ def create_candidate():
         return jsonify({"error": "Candidate already exists for this JD"}), 409
 
     return jsonify({"candidate": candidate_schema.dump(candidate)}), 201
+
+
+@candidates_bp.post("/bulk-upload-resumes")
+@jwt_required()
+def bulk_upload_resumes():
+    role = get_jwt().get("role")
+    BULK_UPLOAD_ALLOWED_ROLES = {
+        UserRole.RECRUITER.value,
+        UserRole.SR_RECRUITER.value,
+        UserRole.M_RECRUITER.value,
+        UserRole.ADMIN.value,
+    }
+    if role not in BULK_UPLOAD_ALLOWED_ROLES:
+        return jsonify({"message": "Forbidden"}), 403
+
+    user = _get_current_user()
+    if user is None:
+        return jsonify({"message": "User not found"}), 404
+
+    # Get jd_id and client_id from form data
+    jd_id = request.form.get("jd_id", type=int)
+    client_id = request.form.get("client_id", type=int)
+    
+    if jd_id is None:
+        return jsonify({"error": "jd_id is required"}), 400
+    
+    if client_id is None:
+        return jsonify({"error": "client_id is required"}), 400
+
+    # For non-ADMIN roles, enforce client_id match
+    if role != UserRole.ADMIN.value:
+        if user.client_id != client_id:
+            return jsonify({"message": "Forbidden"}), 403
+
+    # Verify access to client and JD
+    if not _can_access_client(role, user, client_id):
+        return jsonify({"message": "Forbidden"}), 403
+
+    client = Client.query.get(client_id)
+    if client is None:
+        return jsonify({"error": "Client not found"}), 404
+
+    jd = JobDescription.query.get(jd_id)
+    if jd is None:
+        return jsonify({"error": "JD not found"}), 404
+
+    if jd.client_id != client_id:
+        return jsonify({"errors": {"jd_id": ["JD does not belong to this client."]}}), 400
+
+    # For RECRUITER role, check JD assignment
+    if role == UserRole.RECRUITER.value:
+        if not _is_jd_assigned_to_recruiter(jd_id, user.id):
+            return jsonify({"message": "JD not assigned to this recruiter"}), 403
+
+    # Get uploaded files
+    uploaded_files = request.files.getlist("resumes")
+    if not uploaded_files or len(uploaded_files) == 0:
+        return jsonify({"error": "No resumes provided"}), 400
+
+    if len(uploaded_files) > 20:
+        return jsonify({"error": "Maximum 20 resumes per upload"}), 400
+
+    results = []
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    for upload_file in uploaded_files:
+        result = {
+            "filename": upload_file.filename,
+            "status": "failed",
+            "error": None,
+            "extracted": None,
+            "candidate": None,
+        }
+
+        # Validate filename
+        if not upload_file.filename:
+            result["error"] = "Invalid filename"
+            results.append(result)
+            continue
+
+        # Validate extension
+        original_filename = upload_file.filename
+        ext = os.path.splitext(original_filename)[1].lower()
+        if ext not in RESUME_ALLOWED_EXTENSIONS:
+            result["error"] = f"Only {', '.join(RESUME_ALLOWED_EXTENSIONS)} files are supported"
+            results.append(result)
+            continue
+
+        # Validate file size
+        file_bytes = upload_file.read()
+        if len(file_bytes) > RESUME_MAX_UPLOAD_BYTES:
+            result["error"] = f"File size must be {RESUME_MAX_UPLOAD_BYTES // (1024*1024)}MB or less"
+            results.append(result)
+            continue
+
+        # Extract text from file
+        try:
+            if ext == ".pdf":
+                extracted_text = extract_text_from_pdf(file_bytes)
+            elif ext == ".docx":
+                extracted_text = extract_text_from_docx(file_bytes)
+            else:
+                result["error"] = "Unsupported resume format"
+                results.append(result)
+                continue
+
+            if not extracted_text:
+                result["error"] = "Unable to extract text from resume"
+                results.append(result)
+                continue
+        except Exception as err:
+            result["error"] = f"Failed to extract text: {str(err)}"
+            results.append(result)
+            continue
+
+        # Extract details using AI
+        try:
+            extracted = _extract_resume_fields_with_ai(extracted_text)
+        except RuntimeError as err:
+            result["error"] = str(err)
+            results.append(result)
+            continue
+
+        extracted_full_name = extracted.get("full_name")
+        extracted_email = extracted.get("email")
+        extracted_phone = extracted.get("phone")
+        extracted_skills = extracted.get("skills") or []
+
+        # Normalize extracted data
+        extracted_full_name = extracted_full_name.strip() if isinstance(extracted_full_name, str) else None
+        extracted_email = extracted_email.strip().lower() if isinstance(extracted_email, str) else None
+        extracted_phone = extracted_phone.strip() if isinstance(extracted_phone, str) else None
+        if not isinstance(extracted_skills, list):
+            extracted_skills = []
+
+        # Check cooling period
+        if extracted_email:
+            is_blocked, unblock_date = _check_cooling_period(extracted_email, jd_id)
+            if is_blocked:
+                result["status"] = "rejected"
+                result["error"] = f"Candidate was not selected for this JD within the last 30 days. Re-apply allowed after {unblock_date}."
+                result["extracted"] = {
+                    "full_name": extracted_full_name,
+                    "email": extracted_email,
+                    "phone": extracted_phone,
+                    "skills": extracted_skills,
+                }
+                results.append(result)
+                continue
+
+            # Check if candidate already exists for this JD
+            existing_candidate = Candidate.query.filter(
+                db.func.lower(Candidate.email) == extracted_email,
+                Candidate.jd_id == jd_id,
+                Candidate.status != 'NOT_SELECTED',  # Allow NOT_SELECTED if old
+            ).first()
+
+            if existing_candidate:
+                # Make sure it's not just an old NOT_SELECTED
+                if existing_candidate.status != 'NOT_SELECTED' or (
+                    existing_candidate.status_updated_at and
+                    existing_candidate.status_updated_at >= datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
+                ):
+                    result["status"] = "rejected"
+                    result["error"] = "Candidate already exists for this JD."
+                    result["extracted"] = {
+                        "full_name": extracted_full_name,
+                        "email": extracted_email,
+                        "phone": extracted_phone,
+                        "skills": extracted_skills,
+                    }
+                    results.append(result)
+                    continue
+
+        # Store resume file
+        safe_name = secure_filename(original_filename)
+        timestamp = int(time.time())
+        final_filename = f"{timestamp}_{safe_name}"
+        relative_path = os.path.join(RESUME_UPLOAD_SUBDIR, final_filename)
+        absolute_path = os.path.join(project_root, relative_path)
+
+        os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
+        try:
+            with open(absolute_path, "wb") as output_file:
+                output_file.write(file_bytes)
+        except Exception as err:
+            result["error"] = f"Failed to store resume: {str(err)}"
+            results.append(result)
+            continue
+
+        # Create candidate record
+        try:
+            candidate = Candidate(
+                client_id=client_id,
+                jd_id=jd_id,
+                full_name=extracted_full_name or "Unknown",
+                email=extracted_email or f"unknown_{timestamp}@invalid.local",
+                resume_url=relative_path,
+                resume_filename=safe_name,
+                phone=extracted_phone,
+                ai_extracted=True,
+                status="APPLIED",
+                candidate_extracted_skills=extracted_skills if extracted_skills else None,
+            )
+            db.session.add(candidate)
+            db.session.commit()
+
+            result["status"] = "success"
+            result["extracted"] = {
+                "full_name": extracted_full_name,
+                "email": extracted_email,
+                "phone": extracted_phone,
+                "skills": extracted_skills,
+            }
+            result["candidate"] = candidate_schema.dump(candidate)
+        except IntegrityError:
+            db.session.rollback()
+            result["status"] = "rejected"
+            result["error"] = "Candidate already exists for this JD."
+            result["extracted"] = {
+                "full_name": extracted_full_name,
+                "email": extracted_email,
+                "phone": extracted_phone,
+                "skills": extracted_skills,
+            }
+        except Exception as err:
+            db.session.rollback()
+            result["status"] = "failed"
+            result["error"] = f"Failed to create candidate: {str(err)}"
+            result["extracted"] = {
+                "full_name": extracted_full_name,
+                "email": extracted_email,
+                "phone": extracted_phone,
+                "skills": extracted_skills,
+            }
+
+        results.append(result)
+
+    return jsonify({"results": results}), 200
 
 
 @candidates_bp.put("/<int:candidate_id>")
@@ -250,6 +551,7 @@ def update_candidate(candidate_id):
 
     if "status" in validated:
         candidate.status = validated["status"]
+        candidate.status_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     db.session.commit()
     return jsonify({"candidate": candidate_schema.dump(candidate)}), 200
