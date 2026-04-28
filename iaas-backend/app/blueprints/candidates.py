@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -86,6 +87,26 @@ def _get_resume_upload_paths(candidate_id: int, original_filename: str):
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     absolute_path = os.path.join(project_root, relative_path)
     return safe_name, relative_path, absolute_path
+
+
+def _normalize_candidate_skills(raw_skills):
+    if isinstance(raw_skills, str):
+        try:
+            raw_skills = json.loads(raw_skills)
+        except json.JSONDecodeError:
+            return []
+
+    if not isinstance(raw_skills, list):
+        return []
+
+    normalized = []
+    for skill in raw_skills:
+        if isinstance(skill, str):
+            cleaned = skill.strip()
+            if cleaned:
+                normalized.append(cleaned)
+
+    return normalized
 
 
 def _resolve_upload_absolute_path(relative_path):
@@ -210,7 +231,24 @@ def create_candidate():
     if user is None:
         return jsonify({"message": "User not found"}), 404
 
-    payload = request.get_json(silent=True) or {}
+    is_multipart = (request.content_type or "").startswith("multipart/form-data")
+    if is_multipart:
+        payload = {
+            "client_id": request.form.get("client_id", type=int),
+            "jd_id": request.form.get("jd_id", type=int),
+            "full_name": request.form.get("full_name"),
+            "email": request.form.get("email"),
+            "status": request.form.get("status") or "APPLIED",
+        }
+        raw_phone = request.form.get("phone")
+        raw_skills = request.form.get("candidate_extracted_skills")
+        resume_upload = request.files.get("resume")
+    else:
+        payload = request.get_json(silent=True) or {}
+        raw_phone = payload.get("phone")
+        raw_skills = payload.get("candidate_extracted_skills")
+        resume_upload = request.files.get("resume") if request.files else None
+
     try:
         validated = candidate_schema.load(payload)
     except ValidationError as err:
@@ -259,11 +297,58 @@ def create_candidate():
     )
     db.session.add(candidate)
 
+    normalized_phone = raw_phone.strip() if isinstance(raw_phone, str) and raw_phone.strip() else None
+    normalized_skills = _normalize_candidate_skills(raw_skills)
+    if normalized_phone:
+        candidate.phone = normalized_phone
+    if normalized_skills:
+        candidate.candidate_extracted_skills = normalized_skills
+
+    stored_resume_path = None
+    resume_bytes = None
+    resume_safe_name = None
+    resume_original_filename = None
+
+    if resume_upload is not None and resume_upload.filename:
+        resume_original_filename = resume_upload.filename
+        ext = os.path.splitext(resume_original_filename)[1].lower()
+        if ext not in RESUME_ALLOWED_EXTENSIONS:
+            db.session.rollback()
+            return jsonify({"errors": {"resume": ["Only .pdf and .docx are supported"]}}), 400
+
+        resume_bytes = resume_upload.read()
+        if len(resume_bytes) > RESUME_MAX_UPLOAD_BYTES:
+            db.session.rollback()
+            return jsonify({"errors": {"resume": ["File size must be 2MB or less"]}}), 400
+
     try:
+        db.session.flush()
+
+        if resume_bytes is not None and resume_original_filename:
+            safe_name, relative_path, absolute_path = _get_resume_upload_paths(candidate.id, resume_original_filename)
+            if not safe_name:
+                db.session.rollback()
+                return jsonify({"errors": {"resume": ["Invalid filename"]}}), 400
+
+            os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
+            with open(absolute_path, "wb") as output_file:
+                output_file.write(resume_bytes)
+
+            candidate.resume_url = relative_path
+            candidate.resume_filename = safe_name
+            stored_resume_path = absolute_path
+
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
+        if stored_resume_path and os.path.exists(stored_resume_path):
+            os.remove(stored_resume_path)
         return jsonify({"error": "Candidate already exists for this JD"}), 409
+    except Exception as err:
+        db.session.rollback()
+        if stored_resume_path and os.path.exists(stored_resume_path):
+            os.remove(stored_resume_path)
+        return jsonify({"error": f"Failed to create candidate: {str(err)}"}), 500
 
     return jsonify({"candidate": candidate_schema.dump(candidate)}), 201
 
@@ -320,7 +405,7 @@ def bulk_upload_resumes():
         if not _is_jd_assigned_to_recruiter(jd_id, user.id):
             return jsonify({"message": "JD not assigned to this recruiter"}), 403
 
-    # Get uploaded files
+    # Get uploaded files and extract preview data for review before saving.
     uploaded_files = request.files.getlist("resumes")
     if not uploaded_files or len(uploaded_files) == 0:
         return jsonify({"error": "No resumes provided"}), 400
@@ -329,7 +414,8 @@ def bulk_upload_resumes():
         return jsonify({"error": "Maximum 20 resumes per upload"}), 400
 
     results = []
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    seen_file_hashes = set()
+    seen_emails_in_batch = set()
 
     for upload_file in uploaded_files:
         result = {
@@ -337,7 +423,6 @@ def bulk_upload_resumes():
             "status": "failed",
             "error": None,
             "extracted": None,
-            "candidate": None,
         }
 
         # Validate filename
@@ -360,6 +445,14 @@ def bulk_upload_resumes():
             result["error"] = f"File size must be {RESUME_MAX_UPLOAD_BYTES // (1024*1024)}MB or less"
             results.append(result)
             continue
+
+        file_hash = hashlib.sha256(file_bytes).hexdigest()
+        if file_hash in seen_file_hashes:
+            result["status"] = "rejected"
+            result["error"] = "Duplicate resume file detected in this upload batch."
+            results.append(result)
+            continue
+        seen_file_hashes.add(file_hash)
 
         # Extract text from file
         try:
@@ -403,6 +496,18 @@ def bulk_upload_resumes():
 
         # Check cooling period
         if extracted_email:
+            if extracted_email in seen_emails_in_batch:
+                result["status"] = "rejected"
+                result["error"] = "Duplicate candidate email detected in this upload batch."
+                result["extracted"] = {
+                    "full_name": extracted_full_name,
+                    "email": extracted_email,
+                    "phone": extracted_phone,
+                    "skills": extracted_skills,
+                }
+                results.append(result)
+                continue
+
             is_blocked, unblock_date = _check_cooling_period(extracted_email, jd_id)
             if is_blocked:
                 result["status"] = "rejected"
@@ -440,67 +545,14 @@ def bulk_upload_resumes():
                     results.append(result)
                     continue
 
-        # Store resume file
-        safe_name = secure_filename(original_filename)
-        timestamp = int(time.time())
-        final_filename = f"{timestamp}_{safe_name}"
-        relative_path = os.path.join(RESUME_UPLOAD_SUBDIR, final_filename)
-        absolute_path = os.path.join(project_root, relative_path)
-
-        os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
-        try:
-            with open(absolute_path, "wb") as output_file:
-                output_file.write(file_bytes)
-        except Exception as err:
-            result["error"] = f"Failed to store resume: {str(err)}"
-            results.append(result)
-            continue
-
-        # Create candidate record
-        try:
-            candidate = Candidate(
-                client_id=client_id,
-                jd_id=jd_id,
-                full_name=extracted_full_name or "Unknown",
-                email=extracted_email or f"unknown_{timestamp}@invalid.local",
-                resume_url=relative_path,
-                resume_filename=safe_name,
-                phone=extracted_phone,
-                ai_extracted=True,
-                status="APPLIED",
-                candidate_extracted_skills=extracted_skills if extracted_skills else None,
-            )
-            db.session.add(candidate)
-            db.session.commit()
-
-            result["status"] = "success"
-            result["extracted"] = {
-                "full_name": extracted_full_name,
-                "email": extracted_email,
-                "phone": extracted_phone,
-                "skills": extracted_skills,
-            }
-            result["candidate"] = candidate_schema.dump(candidate)
-        except IntegrityError:
-            db.session.rollback()
-            result["status"] = "rejected"
-            result["error"] = "Candidate already exists for this JD."
-            result["extracted"] = {
-                "full_name": extracted_full_name,
-                "email": extracted_email,
-                "phone": extracted_phone,
-                "skills": extracted_skills,
-            }
-        except Exception as err:
-            db.session.rollback()
-            result["status"] = "failed"
-            result["error"] = f"Failed to create candidate: {str(err)}"
-            result["extracted"] = {
-                "full_name": extracted_full_name,
-                "email": extracted_email,
-                "phone": extracted_phone,
-                "skills": extracted_skills,
-            }
+            seen_emails_in_batch.add(extracted_email)
+        result["status"] = "ready"
+        result["extracted"] = {
+            "full_name": extracted_full_name,
+            "email": extracted_email,
+            "phone": extracted_phone,
+            "skills": extracted_skills,
+        }
 
         results.append(result)
 

@@ -8,6 +8,7 @@ import {
   downloadResume,
   extractResume,
   getCandidates,
+  createCandidateWithResume,
   updateCandidate,
   uploadResume,
   bulkUploadResumes,
@@ -82,9 +83,14 @@ export default function Candidates() {
   const [bulkUploadClientId, setBulkUploadClientId] = useState(isRecruiterScopedRole ? recruiterClientId : '')
   const [bulkUploadFiles, setBulkUploadFiles] = useState([])
   const [bulkUploadErrors, setBulkUploadErrors] = useState({})
-  const [bulkUploadResults, setBulkUploadResults] = useState(null)
-  const [bulkUploadProcessing, setBulkUploadProcessing] = useState(false)
+  const [bulkUploadDrafts, setBulkUploadDrafts] = useState([])
+  const [bulkUploadPreviewing, setBulkUploadPreviewing] = useState(false)
+  const [bulkUploadCreating, setBulkUploadCreating] = useState(false)
   const [bulkUploadProgress, setBulkUploadProgress] = useState(0)
+  
+  // Modal for viewing extracted resume details
+  const [showExtractedModal, setShowExtractedModal] = useState(false)
+  const [selectedCandidateForView, setSelectedCandidateForView] = useState(null)
 
   const jdMap = useMemo(() => new Map(jds.map((jd) => [jd.id, jd])), [jds])
   const clientMap = useMemo(() => new Map(clients.map((client) => [client.id, client.name])), [clients])
@@ -111,6 +117,10 @@ export default function Candidates() {
     }
     return []
   }, [jds, isRecruiterScopedRole, recruiterClientId, bulkUploadClientId])
+
+  const bulkUploadCreatedCount = bulkUploadDrafts.filter((draft) => draft.createStatus === 'created').length
+  const bulkUploadPendingCount = bulkUploadDrafts.filter((draft) => draft.createStatus !== 'created' && draft.createStatus !== 'error').length
+  const bulkUploadErrorCount = bulkUploadDrafts.filter((draft) => draft.createStatus === 'error' || draft.previewStatus === 'failed' || draft.previewStatus === 'rejected').length
 
   useEffect(() => {
     if (!isRecruiterScopedRole || !recruiterClientId) return
@@ -354,6 +364,11 @@ export default function Candidates() {
   }
 
   async function handleDeleteCandidate(candidateId) {
+    const isConfirmed = window.confirm('Are you sure you want to delete this candidate? This action cannot be undone.')
+    if (!isConfirmed) {
+      return
+    }
+
     try {
       setError('')
       setSuccess('')
@@ -365,15 +380,122 @@ export default function Candidates() {
     }
   }
 
+  function normalizeDraftSkills(skills) {
+    if (!Array.isArray(skills)) return []
+    return skills
+      .map((skill) => (typeof skill === 'string' ? skill.trim() : ''))
+      .filter(Boolean)
+  }
+
+  function createBulkDraftFromResult(result, file, index) {
+    const extracted = result?.extracted || {}
+    const skills = normalizeDraftSkills(extracted.skills)
+    return {
+      id: `${index}-${file?.name || result?.filename || 'resume'}`,
+      file,
+      filename: result?.filename || file?.name || `resume-${index + 1}`,
+      previewStatus: result?.status || 'failed',
+      previewError: result?.error || '',
+      createStatus: 'pending',
+      createError: '',
+      candidate: null,
+      isEditing: false,
+      full_name: extracted.full_name || '',
+      email: extracted.email || '',
+      phone: extracted.phone || '',
+      skills,
+      original: {
+        full_name: extracted.full_name || '',
+        email: extracted.email || '',
+        phone: extracted.phone || '',
+        skills,
+      },
+    }
+  }
+
+  function updateBulkDraft(draftId, updater) {
+    setBulkUploadDrafts((previous) => previous.map((draft) => (
+      draft.id === draftId ? updater(draft) : draft
+    )))
+  }
+
+  function handleBulkDraftEdit(draftId) {
+    updateBulkDraft(draftId, (draft) => ({
+      ...draft,
+      isEditing: true,
+      createError: '',
+    }))
+  }
+
+  function handleBulkDraftCancel(draftId) {
+    updateBulkDraft(draftId, (draft) => ({
+      ...draft,
+      ...draft.original,
+      isEditing: false,
+      createError: '',
+    }))
+  }
+
+  function handleBulkDraftSave(draftId) {
+    updateBulkDraft(draftId, (draft) => ({
+      ...draft,
+      original: {
+        full_name: draft.full_name,
+        email: draft.email,
+        phone: draft.phone,
+        skills: [...draft.skills],
+      },
+      isEditing: false,
+      createError: '',
+    }))
+  }
+
+  function handleBulkDraftFieldChange(draftId, field, value) {
+    updateBulkDraft(draftId, (draft) => ({
+      ...draft,
+      [field]: value,
+      createError: '',
+      createStatus: draft.createStatus === 'created' ? 'created' : draft.createStatus,
+    }))
+  }
+
+  function handleBulkDraftSkillsChange(draftId, value) {
+    const skills = value
+      .split(',')
+      .map((skill) => skill.trim())
+      .filter(Boolean)
+
+    updateBulkDraft(draftId, (draft) => ({
+      ...draft,
+      skills,
+      createError: '',
+      createStatus: draft.createStatus === 'created' ? 'created' : draft.createStatus,
+    }))
+  }
+
   function handleBulkUploadFileChange(event) {
     const newFiles = Array.from(event.target.files || [])
     const MAX_FILE_SIZE = 2 * 1024 * 1024 // 2MB
     const errors = {}
 
+    const existingSignatures = new Set(
+      bulkUploadFiles.map((file) => `${file.name}:${file.size}`),
+    )
+    const batchSignatures = new Set()
+
     newFiles.forEach((file) => {
       if (file.size > MAX_FILE_SIZE) {
         errors[file.name] = `File size exceeds 2MB limit (${(file.size / (1024 * 1024)).toFixed(2)}MB)`
+        return
       }
+
+      const signature = `${file.name}:${file.size}`
+      if (existingSignatures.has(signature) || batchSignatures.has(signature)) {
+        errors[file.name] = 'Duplicate file selected. Please remove duplicate resumes.'
+        return
+      }
+
+      batchSignatures.add(signature)
     })
 
     setBulkUploadErrors(errors)
@@ -405,8 +527,9 @@ export default function Candidates() {
     setBulkUploadClientId(isRecruiterScopedRole ? recruiterClientId : '')
     setBulkUploadFiles([])
     setBulkUploadErrors({})
-    setBulkUploadResults(null)
-    setBulkUploadProcessing(false)
+    setBulkUploadDrafts([])
+    setBulkUploadPreviewing(false)
+    setBulkUploadCreating(false)
     setBulkUploadProgress(0)
   }
 
@@ -416,9 +539,10 @@ export default function Candidates() {
       return
     }
 
-    setBulkUploadProcessing(true)
+    setBulkUploadPreviewing(true)
     setBulkUploadProgress(0)
     setError('')
+    setSuccess('')
 
     try {
       const response = await bulkUploadResumes(
@@ -428,17 +552,140 @@ export default function Candidates() {
       )
 
       const results = response.data?.results || []
-      setBulkUploadResults(results)
+      const nextDrafts = results.map((result, index) => createBulkDraftFromResult(result, bulkUploadFiles[index], index))
+      setBulkUploadDrafts(nextDrafts)
       setBulkUploadFiles([])
-      
-      // Reload candidates
-      await loadData()
     } catch (uploadError) {
       setError(uploadError?.response?.data?.error || 'Failed to upload resumes')
-      setBulkUploadResults(null)
     } finally {
-      setBulkUploadProcessing(false)
+      setBulkUploadPreviewing(false)
     }
+  }
+
+  async function handleBulkCreateCandidates() {
+    const effectiveClientId = bulkUploadClientId || selectedClientId
+    if (!bulkUploadJdId || !effectiveClientId) {
+      setError('Client and JD are required to create candidates.')
+      return
+    }
+
+    if (bulkUploadDrafts.length === 0) {
+      setError('Preview resumes before creating candidates.')
+      return
+    }
+
+    setBulkUploadCreating(true)
+    setBulkUploadProgress(0)
+    setError('')
+    setSuccess('')
+
+    let createdCount = 0
+
+    const emailCounts = new Map()
+    bulkUploadDrafts.forEach((draft) => {
+      if (draft.createStatus === 'created') return
+      const normalizedEmail = draft.email.trim().toLowerCase()
+      if (!normalizedEmail) return
+      emailCounts.set(normalizedEmail, (emailCounts.get(normalizedEmail) || 0) + 1)
+    })
+
+    for (let index = 0; index < bulkUploadDrafts.length; index += 1) {
+      const draft = bulkUploadDrafts[index]
+
+      if (draft.createStatus === 'created') {
+        setBulkUploadProgress(index + 1)
+        continue
+      }
+
+      const nextCreateStatus = draft.createStatus === 'created' ? 'created' : 'creating'
+
+      updateBulkDraft(draft.id, (currentDraft) => ({
+        ...currentDraft,
+        createStatus: nextCreateStatus,
+        createError: '',
+      }))
+
+      if (!['ready', 'success'].includes(draft.previewStatus)) {
+        updateBulkDraft(draft.id, (currentDraft) => ({
+          ...currentDraft,
+          createStatus: 'error',
+          createError: currentDraft.previewError || 'Resume is not ready for creation. Fix preview issues first.',
+        }))
+        continue
+      }
+
+      if (!draft.full_name.trim() || !draft.email.trim()) {
+        updateBulkDraft(draft.id, (currentDraft) => ({
+          ...currentDraft,
+          createStatus: 'error',
+          createError: 'Full name and email are required before creating.',
+        }))
+        continue
+      }
+
+      const normalizedEmail = draft.email.trim().toLowerCase()
+      if ((emailCounts.get(normalizedEmail) || 0) > 1) {
+        updateBulkDraft(draft.id, (currentDraft) => ({
+          ...currentDraft,
+          createStatus: 'error',
+          createError: 'Duplicate email detected in this bulk upload. Keep only one candidate per email.',
+        }))
+        continue
+      }
+
+      if (!draft.file) {
+        updateBulkDraft(draft.id, (currentDraft) => ({
+          ...currentDraft,
+          createStatus: 'error',
+          createError: 'Original resume file is missing.',
+        }))
+        continue
+      }
+
+      try {
+        const formData = new FormData()
+        formData.append('client_id', String(Number(effectiveClientId)))
+        formData.append('jd_id', String(Number(bulkUploadJdId)))
+        formData.append('full_name', draft.full_name.trim())
+        formData.append('email', draft.email.trim())
+        formData.append('status', 'APPLIED')
+        if (draft.phone?.trim()) {
+          formData.append('phone', draft.phone.trim())
+        }
+        if (draft.skills.length > 0) {
+          formData.append('candidate_extracted_skills', JSON.stringify(draft.skills))
+        }
+        formData.append('resume', draft.file)
+
+        const response = await createCandidateWithResume(formData)
+        createdCount += 1
+        updateBulkDraft(draft.id, (currentDraft) => ({
+          ...currentDraft,
+          createStatus: 'created',
+          createError: '',
+          candidate: response.data?.candidate || null,
+          isEditing: false,
+          original: {
+            full_name: draft.full_name,
+            email: draft.email,
+            phone: draft.phone,
+            skills: [...draft.skills],
+          },
+        }))
+      } catch (createError) {
+        updateBulkDraft(draft.id, (currentDraft) => ({
+          ...currentDraft,
+          createStatus: 'error',
+          createError: createError?.response?.data?.error || 'Failed to create candidate.',
+        }))
+      } finally {
+        setBulkUploadProgress(index + 1)
+      }
+    }
+
+    await loadData()
+    setSuccess(createdCount > 0 ? `Created ${createdCount} candidate${createdCount === 1 ? '' : 's'} successfully.` : 'No candidates were created.')
+    setBulkUploadCreating(false)
   }
 
   return (
@@ -685,7 +932,7 @@ export default function Candidates() {
       {/* Bulk upload panel */}
       {showBulkUpload && (
         <Card>
-          {!bulkUploadResults ? (
+          {bulkUploadDrafts.length === 0 ? (
             <>
               <CardTitle>Bulk Upload Resumes</CardTitle>
               <div className="space-y-4">
@@ -736,7 +983,7 @@ export default function Candidates() {
                       multiple
                       accept=".pdf,.docx"
                       onChange={handleBulkUploadFileChange}
-                      disabled={bulkUploadProcessing}
+                      disabled={bulkUploadPreviewing || bulkUploadCreating}
                       className="hidden"
                     />
                     <label htmlFor="bulk_resumes" className="cursor-pointer">
@@ -784,79 +1031,201 @@ export default function Candidates() {
                 <div className="flex gap-2">
                   <PrimaryBtn
                     onClick={handleBulkUploadSubmit}
-                    loading={bulkUploadProcessing}
-                    disabled={!bulkUploadJdId || bulkUploadFiles.length === 0 || bulkUploadProcessing}
+                    loading={bulkUploadPreviewing}
+                    disabled={!bulkUploadJdId || bulkUploadFiles.length === 0 || bulkUploadPreviewing || bulkUploadCreating}
                   >
-                    {bulkUploadProcessing ? 'Uploading & Extracting...' : 'Upload & Extract All'}
+                    {bulkUploadPreviewing ? 'Extracting...' : 'Upload & Extract'}
                   </PrimaryBtn>
-                  <SecondaryBtn onClick={handleBulkUploadClose} disabled={bulkUploadProcessing}>
+                  <SecondaryBtn onClick={handleBulkUploadClose} disabled={bulkUploadPreviewing || bulkUploadCreating}>
                     Cancel
                   </SecondaryBtn>
                 </div>
 
                 {/* Progress indicator */}
-                {bulkUploadProcessing && (
+                {bulkUploadPreviewing && (
                   <div className="flex items-center gap-2.5 text-sm text-slate-600 mt-4">
                     <span className="w-4 h-4 border-2 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-                    Processing resumes...
+                    Extracting resume data...
                   </div>
                 )}
               </div>
             </>
           ) : (
             <>
-              <CardTitle>Bulk Upload Results</CardTitle>
-              
-              {/* Results table */}
+              <div className="flex items-center justify-between gap-4 mb-4">
+                <div>
+                  <CardTitle>Review Extracted Resumes</CardTitle>
+                  <p className="text-sm text-slate-500 mt-1">Edit the extracted values, then create the candidates when ready.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <SecondaryBtn onClick={() => {
+                    setBulkUploadDrafts([])
+                    setBulkUploadFiles([])
+                    setBulkUploadErrors({})
+                    setBulkUploadProgress(0)
+                  }} disabled={bulkUploadCreating}>
+                    Back to Upload
+                  </SecondaryBtn>
+                </div>
+              </div>
+
+              {/* Review table */}
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-sm min-w-[1100px]">
                   <thead>
                     <tr className="border-b border-slate-200 bg-slate-50">
                       <th className="text-left px-4 py-3 font-semibold text-slate-700">File</th>
-                      <th className="text-left px-4 py-3 font-semibold text-slate-700">Status</th>
                       <th className="text-left px-4 py-3 font-semibold text-slate-700">Name</th>
                       <th className="text-left px-4 py-3 font-semibold text-slate-700">Email</th>
                       <th className="text-left px-4 py-3 font-semibold text-slate-700">Phone</th>
                       <th className="text-left px-4 py-3 font-semibold text-slate-700">Skills</th>
-                      <th className="text-left px-4 py-3 font-semibold text-slate-700">Action</th>
+                      <th className="text-left px-4 py-3 font-semibold text-slate-700">Status</th>
+                      <th className="text-left px-4 py-3 font-semibold text-slate-700">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {bulkUploadResults.map((result, index) => (
-                      <tr key={index} className="border-b border-slate-200 hover:bg-slate-50">
-                        <td className="px-4 py-3 text-slate-700 font-medium">{result.filename}</td>
-                        <td className="px-4 py-3">
-                          <Badge variant={
-                            result.status === 'success' ? 'green' :
-                            result.status === 'failed' ? 'red' :
-                            'amber'
-                          }>
-                            {result.status === 'success' && 'Added'}
-                            {result.status === 'failed' && 'Parse Error'}
-                            {result.status === 'rejected' && 'Rejected'}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3 text-slate-700">{result.extracted?.full_name || '—'}</td>
-                        <td className="px-4 py-3 text-slate-700">{result.extracted?.email || '—'}</td>
-                        <td className="px-4 py-3 text-slate-700">{result.extracted?.phone || '—'}</td>
-                        <td className="px-4 py-3 text-slate-700 text-xs">
-                          {result.extracted?.skills && result.extracted.skills.length > 0 
-                            ? result.extracted.skills.join(', ')
-                            : '—'}
-                        </td>
-                        <td className="px-4 py-3 text-xs">
-                          {result.status === 'failed' && (
-                            <div className="text-red-600 font-medium">{result.error}</div>
-                          )}
-                          {result.status === 'rejected' && (
-                            <div className="text-amber-600 font-medium max-w-xs">{result.error}</div>
-                          )}
-                          {result.status === 'success' && (
-                            <span className="text-green-600 font-medium">Success</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                    {bulkUploadDrafts.map((draft) => {
+                      const rowStatus = draft.createStatus === 'created'
+                        ? 'created'
+                        : draft.createStatus === 'creating'
+                          ? 'creating'
+                          : draft.createStatus === 'error'
+                            ? 'error'
+                            : draft.previewStatus
+
+                      const normalizedRowStatus = rowStatus === 'success' ? 'ready' : rowStatus
+
+                      const statusVariant = normalizedRowStatus === 'created' || normalizedRowStatus === 'ready'
+                        ? 'green'
+                        : normalizedRowStatus === 'creating'
+                          ? 'blue'
+                          : normalizedRowStatus === 'rejected'
+                            ? 'amber'
+                            : 'red'
+
+                      return (
+                        <tr key={draft.id} className="border-b border-slate-200 hover:bg-slate-50 align-top">
+                          <td className="px-4 py-3 text-slate-700 font-medium max-w-[220px]">
+                            <div className="truncate" title={draft.filename}>{draft.filename}</div>
+                            {draft.previewError && (
+                              <div className="mt-1 text-xs text-amber-600">{draft.previewError}</div>
+                            )}
+                            {draft.createError && (
+                              <div className="mt-1 text-xs text-red-600">{draft.createError}</div>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">
+                            {draft.isEditing ? (
+                              <FormInput
+                                value={draft.full_name}
+                                onChange={(event) => handleBulkDraftFieldChange(draft.id, 'full_name', event.target.value)}
+                                placeholder="Full name"
+                              />
+                            ) : (
+                              <span className="font-medium">{draft.full_name || '—'}</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">
+                            {draft.isEditing ? (
+                              <FormInput
+                                type="email"
+                                value={draft.email}
+                                onChange={(event) => handleBulkDraftFieldChange(draft.id, 'email', event.target.value)}
+                                placeholder="email@example.com"
+                              />
+                            ) : (
+                              <span>{draft.email || '—'}</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">
+                            {draft.isEditing ? (
+                              <FormInput
+                                value={draft.phone}
+                                onChange={(event) => handleBulkDraftFieldChange(draft.id, 'phone', event.target.value)}
+                                placeholder="Phone number"
+                              />
+                            ) : (
+                              <span>{draft.phone || '—'}</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">
+                            {draft.isEditing ? (
+                              <FormInput
+                                value={draft.skills.join(', ')}
+                                onChange={(event) => handleBulkDraftSkillsChange(draft.id, event.target.value)}
+                                placeholder="React, Node.js, SQL"
+                              />
+                            ) : draft.skills.length > 0 ? (
+                              <div className="flex flex-wrap gap-2">
+                                {draft.skills.slice(0, 4).map((skill) => (
+                                  <Badge key={skill} variant="gray">{skill}</Badge>
+                                ))}
+                                {draft.skills.length > 4 && (
+                                  <span className="text-xs text-slate-400">+{draft.skills.length - 4} more</span>
+                                )}
+                              </div>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-col gap-2">
+                              <Badge variant={statusVariant}>{
+                                normalizedRowStatus === 'created'
+                                  ? 'Created'
+                                  : normalizedRowStatus === 'creating'
+                                    ? 'Creating'
+                                    : normalizedRowStatus === 'ready'
+                                      ? 'Ready'
+                                      : normalizedRowStatus === 'rejected'
+                                        ? 'Rejected'
+                                        : 'Parse Error'
+                              }</Badge>
+                              {draft.previewStatus === 'rejected' && draft.previewError && (
+                                <p className="text-xs text-amber-600 max-w-[220px]">{draft.previewError}</p>
+                              )}
+                              {draft.previewStatus === 'failed' && draft.previewError && (
+                                <p className="text-xs text-red-600 max-w-[220px]">{draft.previewError}</p>
+                              )}
+                              {draft.createStatus === 'error' && draft.createError && (
+                                <p className="text-xs text-red-600 max-w-[220px]">{draft.createError}</p>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              {draft.isEditing ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleBulkDraftSave(draft.id)}
+                                    className="text-xs bg-[#02c0fa] hover:bg-[#00a8e0] text-white px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleBulkDraftCancel(draft.id)}
+                                    className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleBulkDraftEdit(draft.id)}
+                                  className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                                  disabled={draft.createStatus === 'created'}
+                                >
+                                  Edit
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -865,29 +1234,34 @@ export default function Candidates() {
               <div className="mt-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
                 <div className="grid grid-cols-3 gap-4 text-center">
                   <div>
-                    <p className="text-sm text-slate-500">Added</p>
+                    <p className="text-sm text-slate-500">Created</p>
                     <p className="text-2xl font-semibold text-green-600">
-                      {bulkUploadResults.filter((r) => r.status === 'success').length}
+                      {bulkUploadCreatedCount}
                     </p>
                   </div>
                   <div>
-                    <p className="text-sm text-slate-500">Rejected</p>
-                    <p className="text-2xl font-semibold text-amber-600">
-                      {bulkUploadResults.filter((r) => r.status === 'rejected').length}
+                    <p className="text-sm text-slate-500">Ready / Pending</p>
+                    <p className="text-2xl font-semibold text-blue-600">
+                      {bulkUploadPendingCount}
                     </p>
                   </div>
                   <div>
                     <p className="text-sm text-slate-500">Errors</p>
                     <p className="text-2xl font-semibold text-red-600">
-                      {bulkUploadResults.filter((r) => r.status === 'failed').length}
+                      {bulkUploadErrorCount}
                     </p>
                   </div>
                 </div>
               </div>
 
               {/* Done button */}
-              <div className="flex gap-2 mt-4">
-                <PrimaryBtn onClick={handleBulkUploadClose}>Done</PrimaryBtn>
+              <div className="flex flex-wrap gap-2 mt-4">
+                <PrimaryBtn onClick={handleBulkCreateCandidates} loading={bulkUploadCreating} disabled={bulkUploadCreating || bulkUploadDrafts.length === 0}>
+                  {bulkUploadCreating ? 'Creating Candidates...' : 'Create Candidates'}
+                </PrimaryBtn>
+                <SecondaryBtn onClick={handleBulkUploadClose} disabled={bulkUploadCreating}>
+                  Done
+                </SecondaryBtn>
               </div>
             </>
           )}
@@ -936,20 +1310,25 @@ export default function Candidates() {
                   <div className="truncate text-slate-600">{jdMap.get(candidate.jd_id)?.title || `JD #${candidate.jd_id}`}</div>
                 </TableCell>
                 <TableCell>
-                  <div className="flex items-center gap-2">
+                  {!isPanelist ? (
+                    <select
+                      value={candidate.status}
+                      onChange={(event) => handleStatusChange(candidate.id, event.target.value)}
+                      className={`text-xs border rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium transition-colors cursor-pointer ${
+                        STATUS_VARIANTS[candidate.status] === 'green' ? 'border-green-200 text-green-700' :
+                        STATUS_VARIANTS[candidate.status] === 'red' ? 'border-red-200 text-red-700' :
+                        STATUS_VARIANTS[candidate.status] === 'amber' ? 'border-amber-200 text-amber-700' :
+                        STATUS_VARIANTS[candidate.status] === 'blue' ? 'border-blue-200 text-blue-700' :
+                        'border-slate-200 text-slate-700'
+                      }`}
+                    >
+                      {CANDIDATE_STATUSES.map((status) => (
+                        <option key={status} value={status}>{status}</option>
+                      ))}
+                    </select>
+                  ) : (
                     <Badge variant={STATUS_VARIANTS[candidate.status] || 'gray'}>{candidate.status}</Badge>
-                    {!isPanelist && (
-                      <select
-                        value={candidate.status}
-                        onChange={(event) => handleStatusChange(candidate.id, event.target.value)}
-                        className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-700"
-                      >
-                        {CANDIDATE_STATUSES.map((status) => (
-                          <option key={status} value={status}>{status}</option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
+                  )}
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">
@@ -960,6 +1339,22 @@ export default function Candidates() {
                         className="text-xs bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
                       >
                         Schedule Interview
+                      </button>
+                    )}
+                    {candidate.candidate_extracted_skills && candidate.candidate_extracted_skills.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCandidateForView(candidate)
+                          setShowExtractedModal(true)
+                        }}
+                        className="inline-flex items-center justify-center w-8 h-8 rounded-lg border bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200 transition-colors"
+                        title="View extracted resume data"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
                       </button>
                     )}
                     <button
@@ -993,6 +1388,82 @@ export default function Candidates() {
           )}
         </DataTable>
       </Card>
+
+      {/* Extracted Resume Details Modal */}
+      {showExtractedModal && selectedCandidateForView && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-md max-h-[80vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-slate-900">Extracted Resume Data</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowExtractedModal(false)
+                  setSelectedCandidateForView(null)
+                }}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Full Name */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Full Name</label>
+                <p className="text-sm text-slate-600 bg-slate-50 px-3 py-2 rounded-lg break-words">
+                  {selectedCandidateForView.full_name || '—'}
+                </p>
+              </div>
+
+              {/* Email */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
+                <p className="text-sm text-slate-600 bg-slate-50 px-3 py-2 rounded-lg break-all">
+                  {selectedCandidateForView.email || '—'}
+                </p>
+              </div>
+
+              {/* Phone */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Phone</label>
+                <p className="text-sm text-slate-600 bg-slate-50 px-3 py-2 rounded-lg">
+                  {selectedCandidateForView.phone || '—'}
+                </p>
+              </div>
+
+              {/* Skills */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Skills</label>
+                {selectedCandidateForView.candidate_extracted_skills && selectedCandidateForView.candidate_extracted_skills.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {selectedCandidateForView.candidate_extracted_skills.map((skill, index) => (
+                      <span key={index} className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                        {skill}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-600 bg-slate-50 px-3 py-2 rounded-lg">—</p>
+                )}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowExtractedModal(false)
+                setSelectedCandidateForView(null)
+              }}
+              className="mt-6 w-full bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium transition-colors"
+            >
+              Close
+            </button>
+          </Card>
+        </div>
+      )}
     </AppShell>
   )
 }

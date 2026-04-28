@@ -8,6 +8,12 @@ export function createCandidate(data) {
   return axiosInstance.post('/api/candidates', data)
 }
 
+export function createCandidateWithResume(formData) {
+  return axiosInstance.post('/api/candidates', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
 export function updateCandidate(id, data) {
   return axiosInstance.put(`/api/candidates/${id}`, data)
 }
