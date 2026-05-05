@@ -1,6 +1,7 @@
 import os
 import time
-from datetime import datetime
+import hashlib
+from datetime import datetime, timezone
 from typing import Optional
 
 from flask import Blueprint, jsonify, request, send_file
@@ -127,6 +128,10 @@ def create_jd():
     if client is None:
         return jsonify({"error": "Client not found"}), 404
 
+    # Non-admin roles can only create JDs for their own client
+    if role != UserRole.ADMIN.value and current_user.client_id != client_id:
+        return jsonify({"error": "You can only create JDs for your own client"}), 403
+
     jd = JobDescription(
         client_id=client_id,
         title=validated_data["title"].strip(),
@@ -139,6 +144,19 @@ def create_jd():
 
     jd.job_code = f"JD-{datetime.now().year}-{str(jd.id).zfill(4)}"
     db.session.commit()
+
+    # Auto-assign RECRUITER who created the JD so they can see it and upload resumes for it
+    if role == UserRole.RECRUITER.value:
+        try:
+            assignment = JDRecruiterAssignment(
+                jd_id=jd.id,
+                recruiter_id=current_user.id,
+                assigned_by=current_user.id,
+            )
+            db.session.add(assignment)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
 
     return jsonify({"jd": jd_schema.dump(jd)}), 201
 
@@ -355,6 +373,27 @@ def extract_jd_skills(jd_id):
     if not jd.raw_text or not jd.raw_text.strip():
         return jsonify({"error": "No text to extract from"}), 400
 
+    source_hash = hashlib.sha256(jd.raw_text.encode()).hexdigest()[:16]
+    existing_skills = JDSkill.query.filter_by(jd_id=jd.id).order_by(JDSkill.id.asc()).all()
+    if jd.skills_extraction_hash == source_hash and existing_skills:
+        return jsonify(
+            {
+                "skills": [
+                    {
+                        "id": skill.id,
+                        "jd_id": skill.jd_id,
+                        "skill_name": skill.skill_name,
+                        "skill_type": skill.skill_type,
+                        "importance_level": skill.importance_level,
+                        "subtopics": skill.subtopics,
+                    }
+                    for skill in existing_skills
+                ],
+                "cached": True,
+                "extracted_at": jd.skills_extracted_at.isoformat() if jd.skills_extracted_at else None,
+            }
+        ), 200
+
     try:
         extracted = extract_skills_from_text(jd.raw_text)
     except Exception:
@@ -400,6 +439,8 @@ def extract_jd_skills(jd_id):
         db.session.add(skill)
         saved_skills.append(skill)
 
+    jd.skills_extraction_hash = source_hash
+    jd.skills_extracted_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.session.commit()
 
     response_skills = [

@@ -18,7 +18,9 @@ from app.models.candidate import Candidate, CANDIDATE_STATUSES
 from app.models.client import Client
 from app.models.jd_recruiter_assignment import JDRecruiterAssignment
 from app.models.job_description import JobDescription
+from app.models.operator_client_assignment import OperatorClientAssignment
 from app.models.user import User, UserRole
+from app.services.email_service import send_resume_upload_notification_to_operator
 from app.services.file_parser import extract_text_from_docx, extract_text_from_pdf
 from app.schemas.candidate_schema import candidate_schema, candidates_schema, candidate_update_schema
 
@@ -121,6 +123,10 @@ def _resolve_upload_absolute_path(relative_path):
     return candidate_path
 
 
+def _utc_now_naive():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _extract_resume_fields_with_ai(resume_text: str):
     api_key = current_app.config.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY", "")
     if not api_key:
@@ -161,7 +167,7 @@ def _check_cooling_period(email: str, jd_id: int):
         Blocked if a NOT_SELECTED candidate with this email+jd_id 
         exists with status_updated_at within the last 30 days.
     """
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
+    cutoff = _utc_now_naive() - timedelta(days=30)
     
     candidate = Candidate.query.filter(
         db.func.lower(Candidate.email) == email.lower().strip(),
@@ -177,6 +183,44 @@ def _check_cooling_period(email: str, jd_id: int):
         candidate.status_updated_at + timedelta(days=30)
     ).strftime('%Y-%m-%d')
     return True, unblock_date
+
+
+def _auto_assign_recruiter_to_jd(jd_id: int, user: User) -> None:
+    """Silently adds the uploader to jd_recruiter_assignments if not already assigned."""
+    if user.role == UserRole.ADMIN.value:
+        return
+    existing = JDRecruiterAssignment.query.filter_by(jd_id=jd_id, recruiter_id=user.id).first()
+    if existing:
+        return
+    try:
+        assignment = JDRecruiterAssignment(jd_id=jd_id, recruiter_id=user.id, assigned_by=user.id)
+        db.session.add(assignment)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+def _notify_operators(client_id: int, jd: JobDescription, uploader: User, candidate_count: int) -> None:
+    try:
+        assignments = OperatorClientAssignment.query.filter_by(client_id=client_id).all()
+        if not assignments:
+            return
+        operator_ids = [a.operator_id for a in assignments]
+        operators = User.query.filter(User.id.in_(operator_ids), User.is_active == True).all()
+        client = Client.query.get(client_id)
+        client_name = client.name if client else f"Client #{client_id}"
+        for operator in operators:
+            send_resume_upload_notification_to_operator(
+                operator_email=operator.email,
+                operator_name=operator.full_name,
+                uploader_name=uploader.full_name,
+                client_name=client_name,
+                jd_title=jd.title,
+                job_code=jd.job_code or "",
+                candidate_count=candidate_count,
+            )
+    except Exception:
+        pass  # Notifications are best-effort, never block the main flow
 
 
 @candidates_bp.get("")
@@ -288,6 +332,16 @@ def create_candidate():
         if is_blocked:
             return jsonify({"error": f"Candidate was not selected for this JD. Re-apply allowed after {unblock_date}."}), 409
 
+    # Explicit duplicate check before insert
+    existing = Candidate.query.filter(
+        db.func.lower(Candidate.email) == email.strip().lower(),
+        Candidate.jd_id == jd_id,
+    ).first()
+    if existing:
+        return jsonify({
+            "error": f"Candidate '{email.strip().lower()}' already exists for the JD '{jd.title}'."
+        }), 409
+
     candidate = Candidate(
         client_id=client_id,
         jd_id=jd_id,
@@ -336,6 +390,7 @@ def create_candidate():
 
             candidate.resume_url = relative_path
             candidate.resume_filename = safe_name
+            candidate.resume_uploaded_at = _utc_now_naive()
             stored_resume_path = absolute_path
 
         db.session.commit()
@@ -349,6 +404,10 @@ def create_candidate():
         if stored_resume_path and os.path.exists(stored_resume_path):
             os.remove(stored_resume_path)
         return jsonify({"error": f"Failed to create candidate: {str(err)}"}), 500
+
+    if stored_resume_path:
+        _auto_assign_recruiter_to_jd(jd_id, user)
+        _notify_operators(client_id, jd, user, 1)
 
     return jsonify({"candidate": candidate_schema.dump(candidate)}), 201
 
@@ -521,29 +580,23 @@ def bulk_upload_resumes():
                 results.append(result)
                 continue
 
-            # Check if candidate already exists for this JD
+            # Check if candidate already exists for this JD (any status)
             existing_candidate = Candidate.query.filter(
                 db.func.lower(Candidate.email) == extracted_email,
                 Candidate.jd_id == jd_id,
-                Candidate.status != 'NOT_SELECTED',  # Allow NOT_SELECTED if old
             ).first()
 
             if existing_candidate:
-                # Make sure it's not just an old NOT_SELECTED
-                if existing_candidate.status != 'NOT_SELECTED' or (
-                    existing_candidate.status_updated_at and
-                    existing_candidate.status_updated_at >= datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
-                ):
-                    result["status"] = "rejected"
-                    result["error"] = "Candidate already exists for this JD."
-                    result["extracted"] = {
-                        "full_name": extracted_full_name,
-                        "email": extracted_email,
-                        "phone": extracted_phone,
-                        "skills": extracted_skills,
-                    }
-                    results.append(result)
-                    continue
+                result["status"] = "rejected"
+                result["error"] = f"Candidate '{extracted_email}' already exists for the JD '{jd.title}'."
+                result["extracted"] = {
+                    "full_name": extracted_full_name,
+                    "email": extracted_email,
+                    "phone": extracted_phone,
+                    "skills": extracted_skills,
+                }
+                results.append(result)
+                continue
 
             seen_emails_in_batch.add(extracted_email)
         result["status"] = "ready"
@@ -603,7 +656,7 @@ def update_candidate(candidate_id):
 
     if "status" in validated:
         candidate.status = validated["status"]
-        candidate.status_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        candidate.status_updated_at = _utc_now_naive()
 
     db.session.commit()
     return jsonify({"candidate": candidate_schema.dump(candidate)}), 200
@@ -670,7 +723,10 @@ def upload_candidate_resume(candidate_id):
 
     candidate.resume_url = relative_path
     candidate.resume_filename = safe_name
+    candidate.resume_uploaded_at = _utc_now_naive()
     db.session.commit()
+
+    _auto_assign_recruiter_to_jd(candidate.jd_id, user)
 
     return jsonify({"candidate": candidate_schema.dump(candidate)}), 200
 
@@ -782,3 +838,32 @@ def download_candidate_resume(candidate_id):
 
     download_name = candidate.resume_filename or os.path.basename(candidate.resume_url)
     return send_file(absolute_path, as_attachment=True, download_name=download_name)
+
+
+@candidates_bp.post("/notify-operators")
+@jwt_required()
+def notify_operators_bulk():
+    """Called by frontend after bulk candidate creation completes."""
+    role = get_jwt().get("role")
+    if role not in RESUME_ALLOWED_ROLES:
+        return jsonify({"message": "Forbidden"}), 403
+
+    user = _get_current_user()
+    if user is None:
+        return jsonify({"message": "User not found"}), 404
+
+    payload = request.get_json(silent=True) or {}
+    jd_id = payload.get("jd_id")
+    client_id = payload.get("client_id")
+    candidate_count = payload.get("candidate_count", 0)
+
+    if not jd_id or not client_id or candidate_count < 1:
+        return jsonify({"message": "jd_id, client_id and candidate_count are required"}), 400
+
+    jd = JobDescription.query.get(jd_id)
+    if jd is None:
+        return jsonify({"error": "JD not found"}), 404
+
+    _notify_operators(client_id, jd, user, candidate_count)
+
+    return jsonify({"message": "Operators notified"}), 200

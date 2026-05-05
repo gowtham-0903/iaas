@@ -1,21 +1,26 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timezone
 from typing import Any, Dict, List, Optional
 
+import pytz
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 import sqlalchemy as sa
 
 from app.extensions import db
 from app.models.candidate import Candidate
+from app.models.jd_recruiter_assignment import JDRecruiterAssignment
+from app.models.jd_skill import JDSkill
 from app.models.job_description import JobDescription
 from app.models.user import User, UserRole
 from app.services.email_service import (
+    send_interview_notification_to_additional_recipient,
     send_interview_scheduled_to_candidate,
     send_interview_scheduled_to_panelist,
     send_interview_scheduled_to_recruiter,
 )
+from app.services.teams_service import cancel_teams_interview_event, create_teams_interview_event
 
 
 interviews_bp = Blueprint("interviews", __name__)
@@ -53,7 +58,18 @@ VALID_INTERVIEW_STATUS = {
     "CANCELLED",
 }
 
-VALID_MODES = {"virtual", "in_person"}
+VALID_MODES = {"virtual"}
+VALID_TIMEZONES = {
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Los_Angeles",
+    "America/Phoenix",
+    "America/Anchorage",
+    "Pacific/Honolulu",
+    "Asia/Kolkata",
+    "UTC",
+}
 
 
 def _get_current_user() -> Optional[User]:
@@ -82,6 +98,23 @@ def _parse_iso_datetime(value: str) -> Optional[datetime]:
     return parsed
 
 
+def _parse_local_to_utc(value: str, tz_str: str) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+
+    normalized = value.strip()
+    if not normalized:
+        return None
+
+    try:
+        naive_dt = datetime.fromisoformat(normalized)
+        local_tz = pytz.timezone(tz_str)
+        local_aware = local_tz.localize(naive_dt)
+        return local_aware.astimezone(pytz.utc).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
 def _parse_date(value: str) -> Optional[date]:
     if not isinstance(value, str):
         return None
@@ -108,6 +141,18 @@ def _iso_format(val: Any) -> Optional[str]:
     if hasattr(val, "isoformat"):
         return val.isoformat()
     return str(val)
+
+
+def _convert_utc_to_local(utc_dt: Optional[datetime], tz_str: str) -> Optional[str]:
+    if utc_dt is None:
+        return None
+
+    try:
+        local_tz = pytz.timezone(tz_str or "America/New_York")
+        utc_aware = pytz.utc.localize(utc_dt)
+        return utc_aware.astimezone(local_tz).isoformat()
+    except Exception:
+        return None
 
 
 def _candidate_accessible_for_user(role: str, user: User, candidate: Candidate) -> bool:
@@ -162,9 +207,13 @@ def _serialize_interview_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                 "jd_id": row["jd_id"],
                 "jd_title": row["jd_title"],
                 "scheduled_at": row["scheduled_at"].isoformat() if row["scheduled_at"] else None,
+                "scheduled_at_local": _convert_utc_to_local(row["scheduled_at"], row.get("timezone", "America/New_York")),
                 "duration_minutes": row["duration_minutes"],
                 "mode": row["mode"],
                 "meeting_link": row["meeting_link"],
+                "timezone": row.get("timezone", "America/New_York"),
+                "external_event_id": row.get("external_event_id"),
+                "teams_meeting_id": row.get("teams_meeting_id"),
                 "notes": row["notes"],
                 "status": row["status"],
                 "panelists": panelists_by_interview.get(row["id"], []),
@@ -186,6 +235,9 @@ def _base_interview_query_sql() -> str:
             s.duration_minutes,
             s.mode,
             s.meeting_link,
+            s.timezone,
+            s.external_event_id,
+            s.teams_meeting_id,
             s.notes,
             s.status
         FROM interview_schedules s
@@ -289,11 +341,21 @@ def create_interview():
     candidate_id = payload.get("candidate_id")
     jd_id = payload.get("jd_id")
     scheduled_at_raw = payload.get("scheduled_at")
+    timezone_str = payload.get("timezone", "America/New_York")
     duration_minutes = payload.get("duration_minutes", 60)
     mode = payload.get("mode")
-    meeting_link = payload.get("meeting_link")
     panelist_ids = payload.get("panelist_ids")
     notes = payload.get("notes")
+    raw_additional_emails = payload.get("additional_emails") or []
+
+    # Normalise and validate additional_emails
+    additional_emails: List[str] = []
+    if isinstance(raw_additional_emails, list):
+        for entry in raw_additional_emails:
+            if isinstance(entry, str):
+                cleaned = entry.strip().lower()
+                if cleaned and "@" in cleaned and "." in cleaned.split("@")[-1]:
+                    additional_emails.append(cleaned)
 
     if not isinstance(candidate_id, int) or candidate_id <= 0:
         return jsonify({"errors": {"candidate_id": ["candidate_id must be a positive integer"]}}), 400
@@ -301,15 +363,25 @@ def create_interview():
     if not isinstance(jd_id, int) or jd_id <= 0:
         return jsonify({"errors": {"jd_id": ["jd_id must be a positive integer"]}}), 400
 
-    scheduled_at = _parse_iso_datetime(scheduled_at_raw)
-    if scheduled_at is None:
-        return jsonify({"errors": {"scheduled_at": ["scheduled_at must be ISO datetime"]}}), 400
+    if not isinstance(timezone_str, str) or not timezone_str.strip():
+        return jsonify({"errors": {"timezone": ["timezone is required"]}}), 400
+
+    timezone_str = timezone_str.strip()
+    if timezone_str not in VALID_TIMEZONES:
+        try:
+            pytz.timezone(timezone_str)
+        except pytz.exceptions.UnknownTimeZoneError:
+            return jsonify({"errors": {"timezone": ["Invalid timezone"]}}), 400
+
+    scheduled_at_utc = _parse_local_to_utc(scheduled_at_raw, timezone_str)
+    if scheduled_at_utc is None:
+        return jsonify({"errors": {"scheduled_at": ["Invalid datetime format"]}}), 400
 
     if not isinstance(duration_minutes, int) or duration_minutes <= 0:
         return jsonify({"errors": {"duration_minutes": ["duration_minutes must be a positive integer"]}}), 400
 
     if mode not in VALID_MODES:
-        return jsonify({"errors": {"mode": ["mode must be virtual or in_person"]}}), 400
+        return jsonify({"errors": {"mode": ["mode must be virtual"]}}), 400
 
     if not isinstance(panelist_ids, list) or not (1 <= len(panelist_ids) <= 3):
         return jsonify({"errors": {"panelist_ids": ["panelist_ids must contain 1 to 3 panelists"]}}), 400
@@ -332,6 +404,14 @@ def create_interview():
     if candidate.jd_id != jd.id:
         return jsonify({"errors": {"jd_id": ["Candidate does not belong to this JD"]}}), 400
 
+    # Fetch JD skills for the candidate invitation email
+    raw_skills = JDSkill.query.filter_by(jd_id=jd_id).all()
+    jd_skills_for_email = [
+        {"skill_name": s.skill_name, "skill_type": s.skill_type, "subtopics": s.subtopics or []}
+        for s in raw_skills
+    ]
+    client_name_for_email = jd.client.name if jd.client else ""
+
     if not _candidate_accessible_for_user(role, user, candidate):
         return jsonify({"message": "Forbidden"}), 403
 
@@ -343,40 +423,21 @@ def create_interview():
     if invalid_panelists:
         return jsonify({"errors": {"panelist_ids": [f"Users {invalid_panelists} are not PANELIST"]}}), 400
 
-    interview_end = scheduled_at + timedelta(minutes=duration_minutes)
-    slot_date = scheduled_at.date()
-    slot_start = scheduled_at.time().replace(microsecond=0)
-    slot_end = interview_end.time().replace(microsecond=0)
-
-    slot_ids_to_book: List[int] = []
-    for panelist_id in panelist_ids:
-        slot_stmt = sa.text(
-            """
-            SELECT id
-            FROM panelist_availability
-            WHERE panelist_id = :panelist_id
-              AND available_date = :available_date
-              AND start_time <= :start_time
-              AND end_time >= :end_time
-              AND is_booked = 0
-            ORDER BY start_time
-            LIMIT 1
-            """
-        )
-        slot_row = db.session.execute(
-            slot_stmt,
-            {
-                "panelist_id": panelist_id,
-                "available_date": slot_date,
-                "start_time": slot_start,
-                "end_time": slot_end,
-            },
-        ).mappings().first()
-
-        if slot_row is None:
-            return jsonify({"error": f"Panelist {panelist_id} is not available for the selected slot"}), 409
-
-        slot_ids_to_book.append(slot_row["id"])
+    # Fetch all recruiters assigned to this JD to include in Teams invite
+    assigned_recruiter_ids = [
+        a.recruiter_id for a in JDRecruiterAssignment.query.filter_by(jd_id=jd_id).all()
+    ]
+    assigned_recruiters = (
+        User.query.filter(User.id.in_(assigned_recruiter_ids), User.is_active == True).all()
+        if assigned_recruiter_ids else []
+    )
+    # Also include JD creator if not already in the assigned list
+    if jd.created_by is not None:
+        creator_ids = {r.id for r in assigned_recruiters}
+        if jd.created_by not in creator_ids:
+            creator = User.query.get(jd.created_by)
+            if creator and creator.is_active:
+                assigned_recruiters.append(creator)
 
     created_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -384,9 +445,9 @@ def create_interview():
         insert_interview_stmt = sa.text(
             """
             INSERT INTO interview_schedules
-                (candidate_id, jd_id, scheduled_at, duration_minutes, mode, meeting_link, notes, status, created_at)
+                (candidate_id, jd_id, scheduled_at, duration_minutes, mode, meeting_link, timezone, notes, status, created_at)
             VALUES
-                (:candidate_id, :jd_id, :scheduled_at, :duration_minutes, :mode, :meeting_link, :notes, :status, :created_at)
+                (:candidate_id, :jd_id, :scheduled_at, :duration_minutes, :mode, :meeting_link, :timezone, :notes, :status, :created_at)
             """
         )
         interview_result = db.session.execute(
@@ -394,10 +455,11 @@ def create_interview():
             {
                 "candidate_id": candidate_id,
                 "jd_id": jd_id,
-                "scheduled_at": scheduled_at,
+                "scheduled_at": scheduled_at_utc,
                 "duration_minutes": duration_minutes,
                 "mode": mode,
-                "meeting_link": meeting_link,
+                "meeting_link": None,
+                "timezone": timezone_str,
                 "notes": notes,
                 "status": "SCHEDULED",
                 "created_at": created_at,
@@ -407,8 +469,8 @@ def create_interview():
 
         assignment_stmt = sa.text(
             """
-            INSERT INTO panel_assignments (interview_id, panelist_id, created_at)
-            VALUES (:interview_id, :panelist_id, :created_at)
+            INSERT INTO panel_assignments (interview_id, panelist_id, assigned_by, created_at)
+            VALUES (:interview_id, :panelist_id, :assigned_by, :created_at)
             """
         )
         for panelist_id in panelist_ids:
@@ -417,32 +479,77 @@ def create_interview():
                 {
                     "interview_id": interview_id,
                     "panelist_id": panelist_id,
+                    "assigned_by": user.id,
                     "created_at": created_at,
                 },
             )
-
-        update_availability_stmt = sa.text(
-            "UPDATE panelist_availability SET is_booked = 1 WHERE id IN :slot_ids"
-        ).bindparams(sa.bindparam("slot_ids", expanding=True))
-        db.session.execute(update_availability_stmt, {"slot_ids": slot_ids_to_book})
 
         db.session.commit()
     except Exception:
         db.session.rollback()
         return jsonify({"error": "Failed to create interview"}), 500
 
+    try:
+        extra_emails = [r.email for r in assigned_recruiters] + additional_emails
+        extra_names = [r.full_name for r in assigned_recruiters] + ["" for _ in additional_emails]
+        meeting = create_teams_interview_event(
+            subject=f"Interview: {jd.title} - {candidate.email}",
+            start_utc=scheduled_at_utc,
+            duration_minutes=duration_minutes,
+            candidate_email=candidate.email,
+            candidate_name=candidate.full_name,
+            panelist_emails=[panelist.email for panelist in panelists],
+            panelist_names=[panelist.full_name for panelist in panelists],
+            notes=notes,
+            extra_attendee_emails=extra_emails,
+            extra_attendee_names=extra_names,
+        )
+        db.session.execute(
+            sa.text(
+                """
+                UPDATE interview_schedules
+                SET meeting_link = :join_url,
+                    external_event_id = :external_event_id,
+                    teams_meeting_id = :teams_meeting_id
+                WHERE id = :interview_id
+                """
+            ),
+            {
+                "join_url": meeting["join_url"],
+                "external_event_id": meeting["external_event_id"],
+                "teams_meeting_id": meeting.get("teams_meeting_id"),
+                "interview_id": interview_id,
+            },
+        )
+        db.session.commit()
+    except RuntimeError as teams_err:
+        db.session.rollback()
+        try:
+            delete_assignments_stmt = sa.text("DELETE FROM panel_assignments WHERE interview_id = :interview_id")
+            delete_interview_stmt = sa.text("DELETE FROM interview_schedules WHERE id = :interview_id")
+            db.session.execute(delete_assignments_stmt, {"interview_id": interview_id})
+            db.session.execute(delete_interview_stmt, {"interview_id": interview_id})
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        return jsonify({"error": f"Failed to create Teams meeting: {str(teams_err)}"}), 503
+
     interview, error = _get_interview_by_id(interview_id, UserRole.ADMIN.value, user)
     if error:
         return error
 
-    recruiter = User.query.get(jd.created_by) if jd.created_by is not None else None
-
     # Email failures are logged by the service and intentionally do not break scheduling.
-    send_interview_scheduled_to_candidate(candidate, interview, jd)
+    send_interview_scheduled_to_candidate(
+        candidate, interview, jd,
+        jd_skills=jd_skills_for_email,
+        client_name=client_name_for_email,
+    )
     for panelist in panelists:
         send_interview_scheduled_to_panelist(panelist, candidate, interview, jd)
-    if recruiter is not None:
+    for recruiter in assigned_recruiters:
         send_interview_scheduled_to_recruiter(recruiter, candidate, interview, jd)
+    for email in additional_emails:
+        send_interview_notification_to_additional_recipient(email, candidate, interview, jd)
 
     return jsonify({"interview": interview}), 201
 
@@ -520,6 +627,20 @@ def update_interview_status(interview_id: int):
         return jsonify({"error": "Interview not found"}), 404
 
     db.session.commit()
+
+    if normalized_status == "CANCELLED":
+        event_row = db.session.execute(
+            sa.text(
+                """
+                SELECT external_event_id
+                FROM interview_schedules
+                WHERE id = :interview_id
+                """
+            ),
+            {"interview_id": interview_id},
+        ).mappings().first()
+        if event_row and event_row["external_event_id"]:
+            cancel_teams_interview_event(event_row["external_event_id"])
 
     interview, error = _get_interview_by_id(interview_id, role, user)
     if error:

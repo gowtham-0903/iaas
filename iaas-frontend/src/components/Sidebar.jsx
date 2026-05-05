@@ -68,6 +68,15 @@ const defaultNavigationSections = [
           </svg>
         ),
       },
+      {
+        label: 'Panelist Assignments',
+        to: '/panelist-assignments',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-1a4 4 0 00-5-3.87M17 20H7m10 0v-1c0-.9-.16-1.765-.456-2.565M7 20H2v-1a4 4 0 015-3.87M7 20v-1c0-.9.16-1.765.456-2.565m0 0a5 5 0 019.088 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        ),
+      },
     ],
   },
   {
@@ -234,6 +243,15 @@ const operatorNavigationSections = [
           </svg>
         ),
       },
+      {
+        label: 'Panelist Assignments',
+        to: '/panelist-assignments',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-1a4 4 0 00-5-3.87M17 20H7m10 0v-1c0-.9-.16-1.765-.456-2.565M7 20H2v-1a4 4 0 015-3.87M7 20v-1c0-.9.16-1.765.456-2.565m0 0a5 5 0 019.088 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        ),
+      },
     ],
   },
 ]
@@ -283,6 +301,9 @@ export default function Sidebar({ logoSubtitle = 'Admin Panel' }) {
         'M_RECRUITER',
         'SR_RECRUITER',
       ].includes(user?.role)
+    }
+    if (item.to === '/panelist-assignments') {
+      return ['ADMIN', 'M_RECRUITER', 'SR_RECRUITER', 'OPERATOR'].includes(user?.role)
     }
     return true
   }

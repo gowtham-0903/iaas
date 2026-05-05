@@ -30,6 +30,7 @@ class UserSchema(BaseSchema):
     email = fields.Email(required=True)
     role = fields.Str(required=True)
     client_id = fields.Int(allow_none=True)
+    client_ids = fields.List(fields.Int(), dump_only=True)
     reports_to = fields.Int(allow_none=True)
     is_active = fields.Bool()
     created_at = fields.DateTime(dump_only=True)
@@ -41,6 +42,7 @@ class CreateUserSchema(BaseSchema):
     password = fields.Str(required=True, load_only=True, validate=validate_password_strength)
     role = fields.Str(required=True, validate=validate.OneOf([role.value for role in UserRole]))
     client_id = fields.Int(allow_none=True, load_default=None)
+    client_ids = fields.List(fields.Int(), load_default=None)
     reports_to = fields.Int(allow_none=True, load_default=None)
     is_active = fields.Bool(load_default=True)
 
@@ -52,6 +54,7 @@ class UpdateUserSchema(BaseSchema):
     role = fields.Str(validate=validate.OneOf([role.value for role in UserRole]))
     is_active = fields.Bool()
     client_id = fields.Int(allow_none=True)
+    client_ids = fields.List(fields.Int(), load_default=None)
     reports_to = fields.Int(allow_none=True)
 
 

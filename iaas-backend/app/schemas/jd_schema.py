@@ -40,6 +40,8 @@ class JDSchema(BaseSchema):
     status = fields.Str(validate=validate.OneOf(["DRAFT", "ACTIVE", "CLOSED"]))
     created_by = fields.Int(dump_only=True)
     created_at = fields.DateTime(dump_only=True)
+    skills_extraction_hash = fields.Str(dump_only=True, allow_none=True)
+    skills_extracted_at = fields.DateTime(dump_only=True, allow_none=True)
     skills = fields.Nested(JDSkillSchema, many=True, dump_only=True)
 
 

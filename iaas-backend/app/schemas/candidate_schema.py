@@ -16,6 +16,7 @@ class CandidateSchema(BaseSchema):
     status_updated_at = fields.DateTime(dump_only=True)
     resume_url = fields.Str(dump_only=True)
     resume_filename = fields.Str(dump_only=True)
+    resume_uploaded_at = fields.DateTime(dump_only=True)
     ai_extracted = fields.Bool(dump_only=True)
     created_at = fields.DateTime(dump_only=True)
 

@@ -3,8 +3,8 @@ import { useSearchParams } from 'react-router-dom'
 
 import { getCandidates } from '../api/candidatesApi'
 import { getClients } from '../api/clientsApi'
+import { getInterviews, createInterview } from '../api/interviewsApi'
 import { getJDs } from '../api/jdApi'
-import { createInterview, getInterviews } from '../api/interviewsApi'
 import { getUsers } from '../api/usersApi'
 import useAuthStore from '../store/authStore'
 import AppShell from '../components/AppShell'
@@ -14,158 +14,221 @@ import {
   Card,
   CardTitle,
   DataTable,
+  EmailTagSelect,
   EmptyState,
   FormField,
   FormInput,
-  FormSelect,
+  FormTextarea,
   LoadingState,
   PrimaryBtn,
+  SearchSelect,
+  SecondaryBtn,
   TableCell,
   TableRow,
 } from '../components/ui'
 
+const TIMEZONE_OPTIONS = [
+  { value: 'America/New_York', label: 'Eastern Time (ET) — New York' },
+  { value: 'America/Chicago', label: 'Central Time (CT) — Chicago' },
+  { value: 'America/Denver', label: 'Mountain Time (MT) — Denver' },
+  { value: 'America/Los_Angeles', label: 'Pacific Time (PT) — Los Angeles' },
+  { value: 'America/Phoenix', label: 'Arizona Time (No DST)' },
+  { value: 'America/Anchorage', label: 'Alaska Time (AKT)' },
+  { value: 'Pacific/Honolulu', label: 'Hawaii Time (HST)' },
+  { value: 'Asia/Kolkata', label: 'India Standard Time (IST)' },
+  { value: 'UTC', label: 'UTC' },
+]
+
 const DEFAULT_FORM = {
   candidate_id: '',
+  candidate_email: '',
   jd_id: '',
-  scheduled_at: '',
+  scheduled_date: '',
+  scheduled_time: '',
+  timezone: 'America/New_York',
   duration_minutes: 60,
   mode: 'virtual',
-  meeting_link: '',
   panelist_ids: [],
   notes: '',
+  additional_emails: [],
 }
 
-const STATUS_VARIANTS = {
+const CANDIDATE_STATUS_VARIANTS = {
+  APPLIED: 'gray',
+  SHORTLISTED: 'blue',
+  INTERVIEWED: 'amber',
+  SELECTED: 'green',
+  NOT_SELECTED: 'red',
+}
+
+const INTERVIEW_STATUS_VARIANTS = {
   SCHEDULED: 'blue',
   IN_PROGRESS: 'amber',
   COMPLETED: 'green',
   CANCELLED: 'red',
 }
 
-function formatDateTime(value) {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return '—'
-  return parsed.toLocaleString([], {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+function formatLocalDateTime(isoString, timezone) {
+  if (!isoString) return '—'
+  try {
+    return new Date(isoString).toLocaleString('en-US', {
+      timeZone: timezone || 'America/New_York',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    })
+  } catch {
+    return isoString
+  }
 }
 
 export default function Interviews() {
-  const [searchParams] = useSearchParams()
-  const preselectedCandidateId = searchParams.get('candidateId') || ''
   const user = useAuthStore((state) => state.user)
-  const canViewPendingScheduling = ['OPERATOR', 'ADMIN'].includes(user?.role)
+  const canSchedule = ['OPERATOR', 'ADMIN', 'M_RECRUITER', 'SR_RECRUITER'].includes(user?.role)
   const scheduleFormRef = useRef(null)
+  const scheduledInterviewsRef = useRef(null)
+  const [searchParams] = useSearchParams()
+  const preselectedJdId = searchParams.get('jd_id') || ''
+  const preselectedCandidateId = searchParams.get('candidate_id') || ''
 
-  const [candidates, setCandidates] = useState([])
-  const [jds, setJDs] = useState([])
   const [clients, setClients] = useState([])
+  const [jds, setJDs] = useState([])
   const [panelists, setPanelists] = useState([])
   const [interviews, setInterviews] = useState([])
-  const [pendingSchedulingCandidates, setPendingSchedulingCandidates] = useState([])
-  const [formData, setFormData] = useState({ ...DEFAULT_FORM, candidate_id: preselectedCandidateId })
+  const [selectedJdId, setSelectedJdId] = useState('')
+  const [jdCandidates, setJdCandidates] = useState([])
+  const [jdInterviews, setJdInterviews] = useState([])
+  const [formData, setFormData] = useState(DEFAULT_FORM)
   const [isLoading, setIsLoading] = useState(true)
-  const [isPendingSchedulingLoading, setIsPendingSchedulingLoading] = useState(false)
+  const [isLoadingJdData, setIsLoadingJdData] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  const jdMap = useMemo(() => new Map(jds.map((jd) => [String(jd.id), jd])), [jds])
-  const clientMap = useMemo(() => new Map(clients.map((client) => [String(client.id), client.name])), [clients])
-
-  const selectedCandidate = useMemo(
-    () => candidates.find((candidate) => String(candidate.id) === String(formData.candidate_id)),
-    [candidates, formData.candidate_id],
-  )
+  const jdOptions = useMemo(() => jds.map((jd) => ({ value: String(jd.id), label: jd.title })), [jds])
 
   useEffect(() => {
     let active = true
 
-    async function loadData() {
+    async function loadBaseData() {
       try {
         setIsLoading(true)
         setError('')
 
-        const [candidatesResponse, jdsResponse, clientsResponse, usersResponse, interviewsResponse] = await Promise.all([
-          getCandidates(),
-          getJDs(),
-          getClients(),
-          getUsers(),
-          getInterviews(),
-        ])
+        const requests = [getJDs(), getClients(), getInterviews()]
+        if (canSchedule) {
+          requests.push(getUsers())
+        }
 
+        const [jdsResponse, clientsResponse, interviewsResponse, usersResponse] = await Promise.all(requests)
         if (!active) return
 
-        const nextCandidates = candidatesResponse.data?.candidates || []
         const nextJds = jdsResponse.data?.jds || []
         const nextClients = clientsResponse.data?.clients || []
-        const nextUsers = Array.isArray(usersResponse.data) ? usersResponse.data : usersResponse.data?.users || []
+        const nextInterviews = interviewsResponse.data?.interviews || []
+        const nextUsers = Array.isArray(usersResponse?.data)
+          ? usersResponse.data
+          : usersResponse?.data?.users || []
 
-        setCandidates(nextCandidates)
         setJDs(nextJds)
         setClients(nextClients)
-        setPanelists(nextUsers.filter((user) => user.role === 'PANELIST'))
-        setInterviews(interviewsResponse.data?.interviews || [])
-
-        if (canViewPendingScheduling) {
-          setIsPendingSchedulingLoading(true)
-
-          const shortlistedCandidates = nextCandidates.filter((candidate) => candidate.status === 'SHORTLISTED')
-          const interviewChecks = await Promise.all(
-            shortlistedCandidates.map(async (candidate) => {
-              try {
-                const response = await getInterviews({ candidate_id: candidate.id })
-                const candidateInterviews = response.data?.interviews || []
-                return {
-                  candidate,
-                  hasInterview: candidateInterviews.length > 0,
-                }
-              } catch (_candidateInterviewError) {
-                return {
-                  candidate,
-                  hasInterview: true,
-                }
-              }
-            }),
-          )
-
-          if (active) {
-            setPendingSchedulingCandidates(
-              interviewChecks
-                .filter((check) => !check.hasInterview)
-                .map((check) => check.candidate),
-            )
-          }
-        } else {
-          setPendingSchedulingCandidates([])
-        }
+        setInterviews(nextInterviews)
+        setPanelists(nextUsers.filter((entry) => entry.role === 'PANELIST'))
       } catch (_loadError) {
         if (active) setError('Failed to load interview scheduling data.')
       } finally {
-        if (active) setIsPendingSchedulingLoading(false)
         if (active) setIsLoading(false)
       }
     }
 
-    loadData()
-
+    loadBaseData()
     return () => {
       active = false
     }
-  }, [canViewPendingScheduling])
+  }, [canSchedule])
 
+  // Auto-select JD + candidate when arriving from the Candidates page
   useEffect(() => {
-    if (!selectedCandidate) return
+    if (!preselectedJdId || isLoading || !canSchedule) return
+
+    async function autoSelect() {
+      try {
+        setIsLoadingJdData(true)
+        setError('')
+        const [candidatesResponse, interviewsResponse] = await Promise.all([
+          getCandidates({ jd_id: Number(preselectedJdId) }),
+          getInterviews({ jd_id: Number(preselectedJdId) }),
+        ])
+        const candidates = candidatesResponse.data?.candidates || []
+        const jdInterviewList = interviewsResponse.data?.interviews || []
+
+        setSelectedJdId(preselectedJdId)
+        setFormData((prev) => ({ ...DEFAULT_FORM, jd_id: preselectedJdId }))
+        setJdCandidates(candidates)
+        setJdInterviews(jdInterviewList)
+
+        if (preselectedCandidateId) {
+          const match = candidates.find((c) => String(c.id) === String(preselectedCandidateId))
+          if (match) {
+            setFormData((prev) => ({
+              ...prev,
+              candidate_id: String(match.id),
+              candidate_email: match.email,
+              jd_id: preselectedJdId,
+            }))
+            setTimeout(() => scheduleFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
+          }
+        }
+      } catch (_err) {
+        setError('Failed to load selected JD data.')
+      } finally {
+        setIsLoadingJdData(false)
+      }
+    }
+
+    autoSelect()
+  }, [preselectedJdId, preselectedCandidateId, isLoading, canSchedule])
+
+  async function refreshInterviews() {
+    const response = await getInterviews()
+    setInterviews(response.data?.interviews || [])
+  }
+
+  async function handleJdSelect(jdId) {
+    setSelectedJdId(jdId)
     setFormData((previous) => ({
-      ...previous,
-      jd_id: String(selectedCandidate.jd_id || ''),
+      ...DEFAULT_FORM,
+      jd_id: jdId,
     }))
-  }, [selectedCandidate])
+    setJdCandidates([])
+    setJdInterviews([])
+
+    if (!jdId) return
+
+    try {
+      setIsLoadingJdData(true)
+      setError('')
+      const [candidatesResponse, interviewsResponse] = await Promise.all([
+        getCandidates({ jd_id: Number(jdId) }),
+        getInterviews({ jd_id: Number(jdId) }),
+      ])
+      setJdCandidates(candidatesResponse.data?.candidates || [])
+      setJdInterviews(interviewsResponse.data?.interviews || [])
+    } catch (_jdLoadError) {
+      setError('Failed to load candidates for the selected JD.')
+    } finally {
+      setIsLoadingJdData(false)
+    }
+  }
+
+  function getCandidateInterviewStatus(candidateId) {
+    return jdInterviews.find(
+      (interview) => interview.candidate_id === candidateId && interview.status !== 'CANCELLED',
+    ) || null
+  }
 
   function togglePanelist(panelistId) {
     setFormData((previous) => {
@@ -184,30 +247,38 @@ export default function Interviews() {
   async function handleSubmit(event) {
     event.preventDefault()
 
+    if (!formData.scheduled_date || !formData.scheduled_time) {
+      setError('Date and time are required.')
+      return
+    }
+
     try {
       setIsSubmitting(true)
       setError('')
       setSuccess('')
 
-      const response = await createInterview({
+      const additionalEmails = (formData.additional_emails || []).map((e) => String(e).trim().toLowerCase())
+
+      const payload = {
         candidate_id: Number(formData.candidate_id),
         jd_id: Number(formData.jd_id),
-        scheduled_at: new Date(formData.scheduled_at).toISOString(),
+        scheduled_at: `${formData.scheduled_date}T${formData.scheduled_time}:00`,
+        timezone: formData.timezone,
         duration_minutes: Number(formData.duration_minutes),
-        mode: formData.mode,
-        meeting_link: formData.meeting_link || null,
+        mode: 'virtual',
         panelist_ids: formData.panelist_ids,
         notes: formData.notes || null,
-      })
-
-      setInterviews((previous) => [response.data?.interview, ...previous].filter(Boolean))
-      if (canViewPendingScheduling) {
-        setPendingSchedulingCandidates((previous) => (
-          previous.filter((candidate) => String(candidate.id) !== String(formData.candidate_id))
-        ))
+        additional_emails: additionalEmails,
       }
+
+      await createInterview(payload)
+      await Promise.all([refreshInterviews(), handleJdSelect(selectedJdId)])
       setSuccess('Interview scheduled successfully.')
-      setFormData({ ...DEFAULT_FORM, candidate_id: preselectedCandidateId, jd_id: selectedCandidate?.jd_id ? String(selectedCandidate.jd_id) : '' })
+      setFormData((previous) => ({
+        ...DEFAULT_FORM,
+        jd_id: previous.jd_id,
+      }))
+      scheduledInterviewsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     } catch (submitError) {
       setError(submitError?.response?.data?.error || submitError?.response?.data?.message || 'Failed to schedule interview.')
     } finally {
@@ -215,193 +286,257 @@ export default function Interviews() {
     }
   }
 
-  function handleScheduleNow(candidate) {
+  function selectCandidateForScheduling(candidate) {
     setFormData((previous) => ({
       ...previous,
       candidate_id: String(candidate.id),
-      jd_id: String(candidate.jd_id || ''),
+      candidate_email: candidate.email,
+      jd_id: String(selectedJdId),
     }))
-
     scheduleFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
+  function clearCandidateSelection() {
+    setFormData((previous) => ({
+      ...previous,
+      candidate_id: '',
+      candidate_email: '',
+      scheduled_date: '',
+      scheduled_time: '',
+      panelist_ids: [],
+      notes: '',
+      additional_emails: [],
+    }))
+  }
+
   return (
-    <AppShell pageTitle="Interviews" pageSubtitle="Schedule interviews and review upcoming sessions">
+    <AppShell pageTitle="Interviews" pageSubtitle="Schedule and review virtual interview sessions">
       <AlertBanner type="error" message={error} />
       <AlertBanner type="success" message={success} />
 
-      {canViewPendingScheduling && (
-        <Card>
-          <CardTitle>Pending Scheduling</CardTitle>
-          {isPendingSchedulingLoading ? (
-            <LoadingState label="Loading pending scheduling queue..." />
-          ) : pendingSchedulingCandidates.length === 0 ? (
-            <EmptyState message="No shortlisted candidates are pending scheduling" />
-          ) : (
-            <div className="space-y-3">
-              {pendingSchedulingCandidates.map((candidate) => {
-                const candidateJd = jdMap.get(String(candidate.jd_id))
-                const clientName =
-                  candidate.client_name ||
-                  clientMap.get(String(candidate.client_id || candidateJd?.client_id)) ||
-                  '—'
+      {canSchedule && (
+        <>
+          <Card>
+            <CardTitle>Step 1 — Select Job Description</CardTitle>
+            {isLoading ? (
+              <LoadingState label="Loading job descriptions..." />
+            ) : (
+              <FormField label="Job Description" htmlFor="schedule_jd">
+                <SearchSelect
+                  inputId="schedule_jd"
+                  options={jdOptions}
+                  value={selectedJdId}
+                  onChange={(val) => handleJdSelect(val || '')}
+                  placeholder="Search and select a JD..."
+                  isClearable
+                />
+              </FormField>
+            )}
+          </Card>
 
-                return (
-                  <div key={candidate.id} className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
-                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="text-sm font-semibold text-slate-900">{candidate.full_name || '—'}</div>
-                        <div className="text-sm text-slate-600">{candidate.email || '—'}</div>
-                        <div className="text-xs text-slate-500">
-                          JD: {candidate.jd_title || candidateJd?.title || '—'}
-                        </div>
-                        <div className="text-xs text-slate-500">Client: {clientName}</div>
-                      </div>
-                      <div>
-                        <PrimaryBtn onClick={() => handleScheduleNow(candidate)}>
-                          Schedule Now
-                        </PrimaryBtn>
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+          {selectedJdId && (
+            <Card>
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <CardTitle>Candidates under this JD</CardTitle>
+                <Badge variant="gray">{jdCandidates.length} total</Badge>
+              </div>
+              {isLoadingJdData ? (
+                <LoadingState label="Loading candidates..." />
+              ) : (
+                <DataTable headers={['Email', 'Name', 'Phone', 'Status', 'Interview Status', 'Action']}>
+                  {jdCandidates.length === 0 ? (
+                    <tr><td colSpan={6}><EmptyState message="No candidates found under this JD" /></td></tr>
+                  ) : (
+                    jdCandidates.map((candidate) => {
+                      const interview = getCandidateInterviewStatus(candidate.id)
+                      return (
+                        <TableRow key={candidate.id}>
+                          <TableCell className="font-medium">{candidate.email || '—'}</TableCell>
+                          <TableCell>{candidate.full_name || '—'}</TableCell>
+                          <TableCell>{candidate.phone || '—'}</TableCell>
+                          <TableCell>
+                            <Badge variant={CANDIDATE_STATUS_VARIANTS[candidate.status] || 'gray'}>
+                              {candidate.status || 'UNKNOWN'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {interview ? (
+                              <div>
+                                <Badge variant="blue">Scheduled</Badge>
+                                <div className="text-xs text-slate-500 mt-1">
+                                  {formatLocalDateTime(interview.scheduled_at_local || interview.scheduled_at, interview.timezone)}
+                                </div>
+                              </div>
+                            ) : (
+                              <Badge variant="gray">Not Scheduled</Badge>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {!interview ? (
+                              <PrimaryBtn onClick={() => selectCandidateForScheduling(candidate)}>
+                                Schedule
+                              </PrimaryBtn>
+                            ) : (
+                              <SecondaryBtn onClick={() => scheduledInterviewsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+                                View
+                              </SecondaryBtn>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })
+                  )}
+                </DataTable>
+              )}
+            </Card>
           )}
-        </Card>
+
+          {formData.candidate_id && (
+            <Card>
+              <div ref={scheduleFormRef} />
+              <CardTitle>Step 2 — Schedule Interview</CardTitle>
+              <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 mb-4 flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-xs text-blue-600 font-semibold uppercase tracking-wide mb-1">Scheduling for</div>
+                  <div className="text-sm font-bold text-blue-900">{formData.candidate_email}</div>
+                  <div className="text-sm font-bold text-blue-900">
+                    {jds.find((jd) => String(jd.id) === String(formData.jd_id))?.title || ''}
+                  </div>
+                </div>
+                <SecondaryBtn onClick={clearCandidateSelection}>Change</SecondaryBtn>
+              </div>
+
+              <form onSubmit={handleSubmit}>
+                <FormField label="Timezone" htmlFor="interview_timezone">
+                  <SearchSelect
+                    inputId="interview_timezone"
+                    options={TIMEZONE_OPTIONS}
+                    value={formData.timezone}
+                    onChange={(val) => setFormData((previous) => ({ ...previous, timezone: val || 'America/New_York' }))}
+                    placeholder="Select timezone"
+                  />
+                </FormField>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <FormField label="Date" htmlFor="interview_date">
+                    <FormInput
+                      id="interview_date"
+                      type="date"
+                      value={formData.scheduled_date}
+                      onChange={(event) => setFormData((previous) => ({ ...previous, scheduled_date: event.target.value }))}
+                      required
+                    />
+                  </FormField>
+                  <FormField
+                    label={`Time (${TIMEZONE_OPTIONS.find((entry) => entry.value === formData.timezone)?.label.split('—')[0].trim() || formData.timezone})`}
+                    htmlFor="interview_time"
+                  >
+                    <FormInput
+                      id="interview_time"
+                      type="time"
+                      value={formData.scheduled_time}
+                      onChange={(event) => setFormData((previous) => ({ ...previous, scheduled_time: event.target.value }))}
+                      required
+                    />
+                  </FormField>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <FormField label="Duration (minutes)" htmlFor="interview_duration">
+                    <SearchSelect
+                      inputId="interview_duration"
+                      options={[
+                        { label: '30 minutes', value: 30 },
+                        { label: '45 minutes', value: 45 },
+                        { label: '60 minutes', value: 60 },
+                        { label: '90 minutes', value: 90 },
+                      ]}
+                      value={formData.duration_minutes}
+                      onChange={(val) => setFormData((previous) => ({ ...previous, duration_minutes: Number(val) || 60 }))}
+                      placeholder="Select duration"
+                    />
+                  </FormField>
+                  <FormField label="Mode" htmlFor="interview_mode">
+                    <SearchSelect
+                      inputId="interview_mode"
+                      options={[{ label: 'Virtual (Teams)', value: 'virtual' }]}
+                      value="virtual"
+                      onChange={() => {}}
+                      isDisabled
+                    />
+                  </FormField>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 mb-4 text-sm text-blue-700">
+                  A unique Microsoft Teams meeting link will be auto-generated and emailed to the candidate and all selected panelists.
+                </div>
+
+                <FormField label={`Panelists (${formData.panelist_ids.length}/3 selected)`} htmlFor="interview_panelists">
+                  <SearchSelect
+                    inputId="interview_panelists"
+                    options={panelists.map((p) => ({ label: `${p.full_name} — ${p.email}`, value: p.id }))}
+                    value={formData.panelist_ids}
+                    onChange={(vals) => setFormData((previous) => ({ ...previous, panelist_ids: vals.slice(0, 3) }))}
+                    isMulti
+                    placeholder="Search and select panelists (max 3)..."
+                    noOptionsMessage="No panelists available"
+                  />
+                  {formData.panelist_ids.length === 3 && (
+                    <p className="text-xs text-amber-600 mt-1">Maximum 3 panelists reached.</p>
+                  )}
+                </FormField>
+
+                <FormField label="Additional Recipients (optional)" htmlFor="interview_additional_emails">
+                  <EmailTagSelect
+                    inputId="interview_additional_emails"
+                    value={formData.additional_emails}
+                    onChange={(emails) => setFormData((previous) => ({ ...previous, additional_emails: emails }))}
+                    placeholder="Type an email and press Enter to add..."
+                  />
+                  <p className="text-xs text-slate-500 mt-1">Press Enter after each email — added to Teams meeting and notified via email.</p>
+                </FormField>
+
+                <FormField label="Notes (optional)" htmlFor="interview_notes">
+                  <FormTextarea
+                    id="interview_notes"
+                    rows={3}
+                    value={formData.notes}
+                    onChange={(event) => setFormData((previous) => ({ ...previous, notes: event.target.value }))}
+                    placeholder="Additional interview notes..."
+                  />
+                </FormField>
+
+                <PrimaryBtn type="submit" loading={isSubmitting} disabled={formData.panelist_ids.length === 0}>
+                  {isSubmitting ? 'Scheduling...' : 'Schedule Interview'}
+                </PrimaryBtn>
+              </form>
+            </Card>
+          )}
+        </>
       )}
 
       <Card>
-        <div ref={scheduleFormRef} />
-        <CardTitle>Schedule Interview</CardTitle>
-        {isLoading ? (
-          <LoadingState label="Loading scheduling form..." />
-        ) : (
-          <form onSubmit={handleSubmit}>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField label="Candidate" htmlFor="interview_candidate">
-                <FormSelect
-                  id="interview_candidate"
-                  value={formData.candidate_id}
-                  onChange={(event) => setFormData((previous) => ({ ...previous, candidate_id: event.target.value }))}
-                  required
-                >
-                  <option value="">Select candidate</option>
-                  {candidates.map((candidate) => (
-                    <option key={candidate.id} value={candidate.id}>{candidate.full_name}</option>
-                  ))}
-                </FormSelect>
-              </FormField>
-              <FormField label="JD" htmlFor="interview_jd">
-                <FormSelect id="interview_jd" value={formData.jd_id} disabled required>
-                  <option value="">Select JD</option>
-                  {jds.map((jd) => (
-                    <option key={jd.id} value={jd.id}>{jd.title}</option>
-                  ))}
-                </FormSelect>
-              </FormField>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <FormField label="Date & Time" htmlFor="interview_scheduled_at">
-                <FormInput
-                  id="interview_scheduled_at"
-                  type="datetime-local"
-                  value={formData.scheduled_at}
-                  onChange={(event) => setFormData((previous) => ({ ...previous, scheduled_at: event.target.value }))}
-                  required
-                />
-              </FormField>
-              <FormField label="Duration (Minutes)" htmlFor="interview_duration">
-                <FormInput
-                  id="interview_duration"
-                  type="number"
-                  min="15"
-                  step="15"
-                  value={formData.duration_minutes}
-                  onChange={(event) => setFormData((previous) => ({ ...previous, duration_minutes: event.target.value }))}
-                  required
-                />
-              </FormField>
-              <FormField label="Mode" htmlFor="interview_mode">
-                <FormSelect
-                  id="interview_mode"
-                  value={formData.mode}
-                  onChange={(event) => setFormData((previous) => ({ ...previous, mode: event.target.value }))}
-                >
-                  <option value="virtual">virtual</option>
-                  <option value="in_person">in_person</option>
-                </FormSelect>
-              </FormField>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField label="Meeting Link" htmlFor="interview_meeting_link">
-                <FormInput
-                  id="interview_meeting_link"
-                  type="url"
-                  placeholder="https://meet.example.com/..."
-                  value={formData.meeting_link}
-                  onChange={(event) => setFormData((previous) => ({ ...previous, meeting_link: event.target.value }))}
-                />
-              </FormField>
-              <FormField label="Notes" htmlFor="interview_notes">
-                <FormInput
-                  id="interview_notes"
-                  type="text"
-                  placeholder="Optional notes"
-                  value={formData.notes}
-                  onChange={(event) => setFormData((previous) => ({ ...previous, notes: event.target.value }))}
-                />
-              </FormField>
-            </div>
-
-            <div className="mb-4">
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">
-                Panelists
-              </label>
-              {panelists.length === 0 ? (
-                <div className="text-sm text-slate-500">No panelists available from the current user scope.</div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  {panelists.map((panelist) => {
-                    const checked = formData.panelist_ids.includes(panelist.id)
-                    return (
-                      <label key={panelist.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2 text-sm ${checked ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white'}`}>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => togglePanelist(panelist.id)}
-                        />
-                        <span>{panelist.full_name}</span>
-                      </label>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-
-            <PrimaryBtn type="submit" loading={isSubmitting} disabled={formData.panelist_ids.length === 0}>
-              {isSubmitting ? 'Scheduling...' : 'Schedule Interview'}
-            </PrimaryBtn>
-          </form>
-        )}
-      </Card>
-
-      <Card>
+        <div ref={scheduledInterviewsRef} />
         <CardTitle>Scheduled Interviews</CardTitle>
-        <DataTable headers={['Candidate', 'JD', 'Date', 'Mode', 'Status']} loading={isLoading} loadingLabel="Loading interviews...">
+        <DataTable
+          headers={['Candidate Email', 'Candidate Name', 'JD', 'Date & Time', 'Timezone', 'Mode', 'Panelists', 'Status']}
+          loading={isLoading}
+          loadingLabel="Loading interviews..."
+        >
           {interviews.length === 0 && !isLoading ? (
-            <tr><td colSpan={5}><EmptyState message="No interviews found" /></td></tr>
+            <tr><td colSpan={8}><EmptyState message="No interviews found" /></td></tr>
           ) : (
             interviews.map((interview) => (
               <TableRow key={interview.id}>
+                <TableCell className="font-medium">{interview.candidate_email || '—'}</TableCell>
                 <TableCell>{interview.candidate_name || '—'}</TableCell>
                 <TableCell>{interview.jd_title || '—'}</TableCell>
-                <TableCell>{formatDateTime(interview.scheduled_at)}</TableCell>
-                <TableCell>{interview.mode || '—'}</TableCell>
+                <TableCell>{formatLocalDateTime(interview.scheduled_at_local || interview.scheduled_at, interview.timezone)}</TableCell>
+                <TableCell>{interview.timezone || 'America/New_York'}</TableCell>
+                <TableCell>{interview.mode || 'virtual'}</TableCell>
+                <TableCell>{(interview.panelists || []).map((panelist) => panelist.email).join(', ') || '—'}</TableCell>
                 <TableCell>
-                  <Badge variant={STATUS_VARIANTS[interview.status] || 'gray'}>{interview.status || 'UNKNOWN'}</Badge>
+                  <Badge variant={INTERVIEW_STATUS_VARIANTS[interview.status] || 'gray'}>{interview.status || 'UNKNOWN'}</Badge>
                 </TableCell>
               </TableRow>
             ))

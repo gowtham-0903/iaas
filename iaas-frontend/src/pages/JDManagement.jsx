@@ -15,7 +15,7 @@ import AppShell from '../components/AppShell'
 import {
   AlertBanner, Badge, Card, DataTable, EmptyState, FormField,
   FormInput, FormSelect, FormTextarea, LoadingState, ModalOverlay,
-  PrimaryBtn, SecondaryBtn, TableCell, TableRow,
+  PrimaryBtn, SearchSelect, SecondaryBtn, TableCell, TableRow,
 } from '../components/ui'
 
 const JD_STATUSES = ['DRAFT', 'ACTIVE', 'CLOSED']
@@ -82,11 +82,23 @@ export default function JDManagement() {
   const [success, setSuccess] = useState('')
   const [formMode, setFormMode] = useState('paste')
   const [selectedFile, setSelectedFile] = useState(null)
+  const [fileError, setFileError] = useState('')
   const [formData, setFormData] = useState(() => getDefaultForm(user))
+  const [searchQuery, setSearchQuery] = useState('')
 
   const clientMap = useMemo(() => {
     return new Map(clients.map((client) => [client.id, client.name]))
   }, [clients])
+
+  const filteredJDs = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase()
+    if (!query) return jds
+    return jds.filter((jd) =>
+      jd.title.toLowerCase().includes(query) ||
+      (jd.job_code && jd.job_code.toLowerCase().includes(query)) ||
+      (clientMap.get(jd.client_id) || '').toLowerCase().includes(query)
+    )
+  }, [jds, searchQuery, clientMap])
 
   useEffect(() => {
     let isMounted = true
@@ -136,10 +148,31 @@ export default function JDManagement() {
     }))
   }, [isAdmin, user?.client_id])
 
+  const ALLOWED_JD_EXTENSIONS = ['.pdf', '.docx']
+
+  function handleFileChange(event) {
+    const file = event.target.files?.[0] || null
+    if (!file) {
+      setSelectedFile(null)
+      setFileError('')
+      return
+    }
+    const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase()
+    if (!ALLOWED_JD_EXTENSIONS.includes(ext)) {
+      event.target.value = ''
+      setSelectedFile(null)
+      setFileError('Only .pdf and .docx files are allowed.')
+      return
+    }
+    setFileError('')
+    setSelectedFile(file)
+  }
+
   function resetForm() {
     setFormData(getDefaultForm(user))
     setFormMode('paste')
     setSelectedFile(null)
+    setFileError('')
   }
 
   function openModal() {
@@ -165,6 +198,7 @@ export default function JDManagement() {
   function handleModeChange(nextMode) {
     setFormMode(nextMode)
     setSelectedFile(null)
+    setFileError('')
   }
 
   async function handleCreateJD(event) {
@@ -239,8 +273,8 @@ export default function JDManagement() {
       setIsExtractingId(jdId)
       setError('')
       setSuccess('')
-      await extractSkills(jdId)
-      setSuccess('Skills extracted successfully.')
+      const response = await extractSkills(jdId)
+      setSuccess(response.data?.cached ? 'Existing extracted skills loaded.' : 'Skills extracted successfully.')
       navigate(`/skill-extraction/${jdId}`)
     } catch (_extractError) {
       setError('AI extraction failed — you can add skills manually.')
@@ -274,14 +308,35 @@ export default function JDManagement() {
 
   return (
     <AppShell pageTitle="Job Descriptions" pageSubtitle="Create and manage job descriptions for clients">
-      {!isPanelist && (
-        <div className="flex items-center justify-between mb-5">
-          <div />
-          <PrimaryBtn onClick={openModal}>
-            + New JD
-          </PrimaryBtn>
+      <div className="flex items-center gap-3 mb-5">
+        <div className="relative flex-1 max-w-sm">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+          </svg>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search by title, job code or client..."
+            className="w-full pl-9 pr-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition-all bg-white"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              aria-label="Clear search"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
         </div>
-      )}
+        {!isPanelist && (
+          <PrimaryBtn onClick={openModal}>+ New JD</PrimaryBtn>
+        )}
+      </div>
 
       <AlertBanner type="error" message={error} />
       <AlertBanner type="success" message={success} />
@@ -292,10 +347,10 @@ export default function JDManagement() {
           loading={isLoading}
           loadingLabel="Loading job descriptions..."
         >
-          {jds.length === 0 && !isLoading ? (
-            <tr><td colSpan={6}><EmptyState message="No job descriptions yet" /></td></tr>
+          {filteredJDs.length === 0 && !isLoading ? (
+            <tr><td colSpan={6}><EmptyState message={searchQuery ? `No JDs match "${searchQuery}"` : 'No job descriptions yet'} /></td></tr>
           ) : (
-            jds.map((jd) => (
+            filteredJDs.map((jd) => (
               <TableRow key={jd.id}>
                 <TableCell className="font-medium text-slate-900 whitespace-normal break-words max-w-[320px]">
                   <div>{jd.title}</div>
@@ -324,16 +379,26 @@ export default function JDManagement() {
                 <TableCell>
                   <div className="flex items-center gap-1.5 whitespace-nowrap">
                     {!isPanelist && (
-                      <button
-                        type="button"
-                        onClick={() => handleExtractSkills(jd.id)}
-                        disabled={isExtractingId === jd.id}
-                        className="text-xs bg-[#02c0fa] hover:bg-[#00a8e0] text-white px-2.5 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
-                      >
-                        {isExtractingId === jd.id ? (
-                          <><span className="w-3 h-3 border border-white/40 border-t-white rounded-full spin" />Extracting...</>
-                        ) : 'Extract Skills'}
-                      </button>
+                      jd.skills && jd.skills.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/skill-extraction/${jd.id}`)}
+                          className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                        >
+                          View Skills ({jd.skills.length})
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleExtractSkills(jd.id)}
+                          disabled={isExtractingId === jd.id}
+                          className="text-xs bg-[#02c0fa] hover:bg-[#00a8e0] text-white px-2.5 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
+                        >
+                          {isExtractingId === jd.id ? (
+                            <><span className="w-3 h-3 border border-white/40 border-t-white rounded-full spin" />Extracting...</>
+                          ) : 'Extract Skills'}
+                        </button>
+                      )
                     )}
                     <button
                       type="button"
@@ -394,20 +459,25 @@ export default function JDManagement() {
                 />
               </FormField>
 
-              {isAdmin && (
+              {isAdmin ? (
                 <FormField label="Client" htmlFor="jd-client">
-                  <FormSelect
-                    id="jd-client"
-                    name="client_id"
+                  <SearchSelect
+                    inputId="jd-client"
+                    options={clients.map((c) => ({ label: c.name, value: String(c.id) }))}
                     value={formData.client_id}
-                    onChange={handleFieldChange}
-                    required
-                  >
-                    <option value="">Select client</option>
-                    {clients.map((client) => (
-                      <option key={client.id} value={client.id}>{client.name}</option>
-                    ))}
-                  </FormSelect>
+                    onChange={(val) => handleFieldChange({ target: { name: 'client_id', value: val || '' } })}
+                    placeholder="Select client"
+                  />
+                </FormField>
+              ) : (
+                <FormField label="Client" htmlFor="jd-client-display">
+                  <FormInput
+                    id="jd-client-display"
+                    type="text"
+                    value={clientMap.get(user?.client_id) || '—'}
+                    disabled
+                    readOnly
+                  />
                 </FormField>
               )}
 
@@ -441,12 +511,12 @@ export default function JDManagement() {
                   />
                 </FormField>
               ) : (
-                <FormField label="Upload .pdf or .docx" htmlFor="jd-file">
+                <FormField label="Upload .pdf or .docx" htmlFor="jd-file" error={fileError}>
                   <input
                     id="jd-file"
                     type="file"
                     accept=".pdf,.docx"
-                    onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+                    onChange={handleFileChange}
                     className="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                   />
                 </FormField>

@@ -49,3 +49,11 @@ export function bulkUploadResumes(jdId, clientId, files) {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 }
+
+export function notifyOperators(jdId, clientId, candidateCount) {
+  return axiosInstance.post('/api/candidates/notify-operators', {
+    jd_id: jdId,
+    client_id: clientId,
+    candidate_count: candidateCount,
+  })
+}

@@ -3,6 +3,7 @@ from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 from marshmallow import ValidationError
 
 from app.extensions import db
+from app.models.operator_client_assignment import OperatorClientAssignment
 from app.models.user import User, UserRole
 from app.schemas.user_schema import create_user_schema, update_user_schema, user_schema, users_schema
 
@@ -19,6 +20,25 @@ RECRUITER_ROLES = {
 def _get_current_user():
     user_id = get_jwt_identity()
     return User.query.get(int(user_id)) if user_id else None
+
+
+def _serialize_user(user: User) -> dict:
+    data = user_schema.dump(user)
+    if user.role == UserRole.OPERATOR.value:
+        assignments = OperatorClientAssignment.query.filter_by(operator_id=user.id).all()
+        data["client_ids"] = [a.client_id for a in assignments]
+    return data
+
+
+def _serialize_users(users: list) -> list:
+    return [_serialize_user(u) for u in users]
+
+
+def _sync_operator_clients(operator_id: int, client_ids: list) -> None:
+    OperatorClientAssignment.query.filter_by(operator_id=operator_id).delete()
+    for client_id in client_ids:
+        db.session.add(OperatorClientAssignment(operator_id=operator_id, client_id=client_id))
+
 
 
 def _can_manage_user(actor, target_user):
@@ -92,15 +112,15 @@ def list_users():
     if current_user is None:
         return jsonify({"message": "User not found"}), 404
 
-    if role in {UserRole.ADMIN.value, UserRole.M_RECRUITER.value, UserRole.SR_RECRUITER.value, UserRole.PANELIST.value}:
+    if role in {UserRole.ADMIN.value, UserRole.M_RECRUITER.value, UserRole.SR_RECRUITER.value, UserRole.PANELIST.value, UserRole.OPERATOR.value}:
         query = User.query.filter(User.id != current_user.id)
         
-        if role != UserRole.ADMIN.value and role != UserRole.PANELIST.value:
+        if role not in {UserRole.ADMIN.value, UserRole.PANELIST.value, UserRole.OPERATOR.value}:
             # Recruiters see users in their own client
             query = query.filter(User.client_id == current_user.client_id)
             
         users = query.order_by(User.full_name.asc()).all()
-        return jsonify({"users": users_schema.dump(users)}), 200
+        return jsonify({"users": _serialize_users(users)}), 200
 
     return jsonify({"message": "Forbidden"}), 403
 
@@ -168,20 +188,24 @@ def create_user():
 
     target_role = validated_data.get("role")
     target_client_id = validated_data.get("client_id")
+    target_client_ids = validated_data.get("client_ids") or []
     target_reports_to = validated_data.get("reports_to")
 
-    if target_role in RECRUITER_ROLES and target_client_id is None:
+    if target_role == UserRole.OPERATOR.value:
+        if role != UserRole.ADMIN.value:
+            return jsonify({"message": "Only ADMIN can create OPERATOR users"}), 403
+        if not target_client_ids:
+            return jsonify({"message": "At least one client is required for OPERATOR"}), 400
+    elif target_role in RECRUITER_ROLES and target_client_id is None:
         return jsonify({"message": "Client is required for recruiter roles"}), 400
 
     # Role-based creation rules
     if role == UserRole.M_RECRUITER.value:
-        # M_RECRUITER can create SR_RECRUITER or RECRUITER in their client
         if target_role not in {UserRole.SR_RECRUITER.value, UserRole.RECRUITER.value}:
             return jsonify({"message": "M_RECRUITER can only create SR_RECRUITER or RECRUITER"}), 403
         if current_user.client_id is None or target_client_id != current_user.client_id:
             return jsonify({"message": "Must create users in your own client"}), 403
     elif role == UserRole.SR_RECRUITER.value:
-        # SR_RECRUITER can create RECRUITER in their client
         if target_role != UserRole.RECRUITER.value:
             return jsonify({"message": "SR_RECRUITER can only create RECRUITER"}), 403
         if current_user.client_id is None or target_client_id != current_user.client_id:
@@ -199,16 +223,21 @@ def create_user():
         full_name=validated_data["full_name"],
         email=validated_data["email"].strip().lower(),
         role=validated_data["role"],
-        client_id=validated_data.get("client_id"),
+        client_id=None if target_role == UserRole.OPERATOR.value else validated_data.get("client_id"),
         reports_to=validated_data.get("reports_to"),
         is_active=validated_data.get("is_active", True),
     )
     user.set_password(validated_data["password"])
 
     db.session.add(user)
+    db.session.flush()
+
+    if target_role == UserRole.OPERATOR.value:
+        _sync_operator_clients(user.id, target_client_ids)
+
     db.session.commit()
 
-    return jsonify({"user": user_schema.dump(user)}), 201
+    return jsonify({"user": _serialize_user(user)}), 201
 
 
 @users_bp.put("/<int:user_id>")
@@ -289,9 +318,12 @@ def update_user(user_id):
     if "password" in validated_data and validated_data["password"] is not None:
         user.set_password(validated_data["password"])
 
+    if user.role == UserRole.OPERATOR.value and validated_data.get("client_ids") is not None:
+        _sync_operator_clients(user.id, validated_data["client_ids"])
+
     db.session.commit()
 
-    return jsonify({"user": user_schema.dump(user)}), 200
+    return jsonify({"user": _serialize_user(user)}), 200
 
 
 @users_bp.delete("/<int:user_id>")

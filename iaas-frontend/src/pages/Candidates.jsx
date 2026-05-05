@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import useAuthStore from '../store/authStore'
+import * as XLSX from 'xlsx'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 
 import {
   createCandidate,
@@ -12,6 +15,7 @@ import {
   updateCandidate,
   uploadResume,
   bulkUploadResumes,
+  notifyOperators,
 } from '../api/candidatesApi'
 import { getClients } from '../api/clientsApi'
 import { getInterviews } from '../api/interviewsApi'
@@ -20,7 +24,7 @@ import AppShell from '../components/AppShell'
 import {
   AlertBanner, Avatar, Badge, Card, CardTitle, DataTable,
   EmptyState, FormField, FormInput, FormSelect, LoadingState,
-  PrimaryBtn, SecondaryBtn, TableCell, TableRow,
+  PrimaryBtn, SearchSelect, SecondaryBtn, TableCell, TableRow,
 } from '../components/ui'
 
 const CANDIDATE_STATUSES = ['APPLIED', 'SHORTLISTED', 'INTERVIEWED', 'SELECTED', 'NOT_SELECTED']
@@ -32,6 +36,8 @@ const STATUS_VARIANTS = {
   SHORTLISTED: 'blue',
   APPLIED: 'gray',
 }
+
+const IST_TIMEZONE = 'Asia/Kolkata'
 
 const DEFAULT_FORM = {
   client_id: '',
@@ -46,6 +52,28 @@ function getDefaultForm(clientId = '') {
     ...DEFAULT_FORM,
     client_id: clientId,
   }
+}
+
+function formatDateTimeInIST(value) {
+  if (!value) return '—'
+
+  const normalizedValue = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
+    ? `${value}Z`
+    : value
+
+  const parsed = new Date(normalizedValue)
+  if (Number.isNaN(parsed.getTime())) return '—'
+
+  return parsed.toLocaleString('en-IN', {
+    timeZone: IST_TIMEZONE,
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  })
 }
 
 export default function Candidates() {
@@ -118,9 +146,10 @@ export default function Candidates() {
     return []
   }, [jds, isRecruiterScopedRole, recruiterClientId, bulkUploadClientId])
 
-  const bulkUploadCreatedCount = bulkUploadDrafts.filter((draft) => draft.createStatus === 'created').length
-  const bulkUploadPendingCount = bulkUploadDrafts.filter((draft) => draft.createStatus !== 'created' && draft.createStatus !== 'error').length
   const bulkUploadErrorCount = bulkUploadDrafts.filter((draft) => draft.createStatus === 'error' || draft.previewStatus === 'failed' || draft.previewStatus === 'rejected').length
+  const bulkUploadDuplicateCount = Object.values(bulkUploadErrors).filter((message) => message.toLowerCase().includes('duplicate')).length
+  const bulkUploadValidationErrorCount = Object.keys(bulkUploadErrors).length - bulkUploadDuplicateCount
+  const bulkUploadIssuesCount = bulkUploadValidationErrorCount + bulkUploadErrorCount
 
   useEffect(() => {
     if (!isRecruiterScopedRole || !recruiterClientId) return
@@ -684,8 +713,99 @@ export default function Candidates() {
     }
 
     await loadData()
+
+    if (createdCount > 0) {
+      try {
+        await notifyOperators(Number(bulkUploadJdId), Number(effectiveClientId), createdCount)
+      } catch (_notifyError) {
+        // Notification failure should not block the user
+      }
+    }
+
     setSuccess(createdCount > 0 ? `Created ${createdCount} candidate${createdCount === 1 ? '' : 's'} successfully.` : 'No candidates were created.')
     setBulkUploadCreating(false)
+  }
+
+  function exportToExcel() {
+    if (candidates.length === 0) {
+      setError('No candidates to export')
+      return
+    }
+
+    const exportData = candidates.map((candidate) => ({
+      'Full Name': candidate.full_name,
+      'Email': candidate.email,
+      'Phone': candidate.phone || '',
+      'Status': candidate.status,
+      'Client': clientMap.get(candidate.client_id) || '',
+      'Job Description': jdMap.get(candidate.jd_id)?.title || '',
+      'Created At (IST)': formatDateTimeInIST(candidate.created_at),
+      'Resume Uploaded At (IST)': formatDateTimeInIST(candidate.resume_uploaded_at),
+    }))
+
+    const worksheet = XLSX.utils.json_to_sheet(exportData)
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Candidates')
+
+    // Adjust column widths
+    const columnWidths = [
+      { wch: 20 }, // Full Name
+      { wch: 30 }, // Email
+      { wch: 15 }, // Phone
+      { wch: 15 }, // Status
+      { wch: 20 }, // Client
+      { wch: 30 }, // Job Description
+      { wch: 24 }, // Created At (IST)
+      { wch: 24 }, // Resume Uploaded At (IST)
+    ]
+    worksheet['!cols'] = columnWidths
+
+    const fileName = `candidates_${new Date().toISOString().split('T')[0]}.xlsx`
+    XLSX.writeFile(workbook, fileName)
+    setSuccess(`Exported ${candidates.length} candidate${candidates.length === 1 ? '' : 's'} to Excel`)
+  }
+
+  function exportToPDF() {
+    if (candidates.length === 0) {
+      setError('No candidates to export')
+      return
+    }
+
+    const doc = new jsPDF()
+    doc.setFontSize(16)
+    doc.text('Candidates Report', 14, 15)
+    doc.setFontSize(10)
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 25)
+
+    const tableData = candidates.map((candidate) => [
+      candidate.full_name,
+      candidate.email,
+      candidate.phone || '',
+      candidate.status,
+      clientMap.get(candidate.client_id) || '',
+      jdMap.get(candidate.jd_id)?.title || '',
+      formatDateTimeInIST(candidate.created_at),
+      formatDateTimeInIST(candidate.resume_uploaded_at),
+    ])
+
+    autoTable(doc, {
+      head: [['Full Name', 'Email', 'Phone', 'Status', 'Client', 'Job Description', 'Created At (IST)', 'Resume Uploaded At (IST)']],
+      body: tableData,
+      startY: 35,
+      theme: 'grid',
+      styles: {
+        fontSize: 9,
+      },
+      headStyles: {
+        fillColor: [41, 128, 185],
+        textColor: 255,
+        fontStyle: 'bold',
+      },
+    })
+
+    const fileName = `candidates_${new Date().toISOString().split('T')[0]}.pdf`
+    doc.save(fileName)
+    setSuccess(`Exported ${candidates.length} candidate${candidates.length === 1 ? '' : 's'} to PDF`)
   }
 
   return (
@@ -694,6 +814,12 @@ export default function Candidates() {
         <div className="flex items-center justify-between mb-5">
           <div />
           <div className="flex gap-2">
+            <SecondaryBtn onClick={exportToExcel}>
+              📊 Export Excel
+            </SecondaryBtn>
+            <SecondaryBtn onClick={exportToPDF}>
+              📄 Export PDF
+            </SecondaryBtn>
             <PrimaryBtn
               onClick={() => {
                 setShowBulkUpload((previous) => !previous)
@@ -731,31 +857,24 @@ export default function Candidates() {
       <Card>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormField label="Filter by Client" htmlFor="candidate_filter_client">
-            <FormSelect
-              id="candidate_filter_client"
+            <SearchSelect
+              inputId="candidate_filter_client"
+              options={clients.map((c) => ({ label: c.name, value: String(c.id) }))}
               value={selectedClientId}
-              onChange={(event) => {
-                setSelectedClientId(event.target.value)
-                setSelectedJdId('')
-              }}
-            >
-              <option value="">All clients</option>
-              {clients.map((client) => (
-                <option key={client.id} value={client.id}>{client.name}</option>
-              ))}
-            </FormSelect>
+              onChange={(val) => { setSelectedClientId(val || ''); setSelectedJdId('') }}
+              placeholder="All clients"
+              isClearable
+            />
           </FormField>
           <FormField label="Filter by JD" htmlFor="candidate_filter_jd">
-            <FormSelect
-              id="candidate_filter_jd"
+            <SearchSelect
+              inputId="candidate_filter_jd"
+              options={filteredJds.map((jd) => ({ label: jd.title, value: String(jd.id) }))}
               value={selectedJdId}
-              onChange={(event) => setSelectedJdId(event.target.value)}
-            >
-              <option value="">All job descriptions</option>
-              {filteredJds.map((jd) => (
-                <option key={jd.id} value={jd.id}>{jd.title}</option>
-              ))}
-            </FormSelect>
+              onChange={(val) => setSelectedJdId(val || '')}
+              placeholder="All job descriptions"
+              isClearable
+            />
           </FormField>
         </div>
       </Card>
@@ -770,40 +889,24 @@ export default function Candidates() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {!isRecruiterScopedRole && (
                     <FormField label="Client" htmlFor="candidate_client_id">
-                      <FormSelect
-                        id="candidate_client_id"
+                      <SearchSelect
+                        inputId="candidate_client_id"
+                        options={clients.map((c) => ({ label: c.name, value: String(c.id) }))}
                         value={formData.client_id}
-                        onChange={(event) => {
-                          setFormData((previous) => ({
-                            ...previous,
-                            client_id: event.target.value,
-                            jd_id: '',
-                          }))
-                        }}
-                        required
-                      >
-                        <option value="">Select client</option>
-                        {clients.map((client) => (
-                          <option key={client.id} value={client.id}>{client.name}</option>
-                        ))}
-                      </FormSelect>
+                        onChange={(val) => setFormData((previous) => ({ ...previous, client_id: val || '', jd_id: '' }))}
+                        placeholder="Select client"
+                      />
                     </FormField>
                   )}
                   <FormField label="Job Description" htmlFor="candidate_jd_id">
-                    <FormSelect
-                      id="candidate_jd_id"
+                    <SearchSelect
+                      inputId="candidate_jd_id"
+                      options={jdsForForm.map((jd) => ({ label: jd.title, value: String(jd.id) }))}
                       value={formData.jd_id}
-                      onChange={(event) => setFormData((previous) => ({ ...previous, jd_id: event.target.value }))}
-                      required
-                    >
-                      <option value="">Select JD</option>
-                      {jdsForForm.length === 0 && isRecruiterScopedRole ? (
-                        <option value="" disabled>No job descriptions assigned to you. Contact your manager.</option>
-                      ) : null}
-                      {jdsForForm.map((jd) => (
-                        <option key={jd.id} value={jd.id}>{jd.title}</option>
-                      ))}
-                    </FormSelect>
+                      onChange={(val) => setFormData((previous) => ({ ...previous, jd_id: val || '' }))}
+                      placeholder="Select JD"
+                      noOptionsMessage={isRecruiterScopedRole ? 'No JDs assigned to you. Contact your manager.' : 'No options'}
+                    />
                   </FormField>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -829,15 +932,13 @@ export default function Candidates() {
                   </FormField>
                 </div>
                 <FormField label="Initial Status" htmlFor="candidate_status">
-                  <FormSelect
-                    id="candidate_status"
+                  <SearchSelect
+                    inputId="candidate_status"
+                    options={CANDIDATE_STATUSES.map((s) => ({ label: s, value: s }))}
                     value={formData.status}
-                    onChange={(event) => setFormData((previous) => ({ ...previous, status: event.target.value }))}
-                  >
-                    {CANDIDATE_STATUSES.map((status) => (
-                      <option key={status} value={status}>{status}</option>
-                    ))}
-                  </FormSelect>
+                    onChange={(val) => setFormData((previous) => ({ ...previous, status: val || 'APPLIED' }))}
+                    placeholder="Select status"
+                  />
                 </FormField>
                 <div className="flex gap-2 pt-1">
                   <PrimaryBtn type="submit" loading={isSubmitting}>
@@ -939,39 +1040,26 @@ export default function Candidates() {
                 {/* Client selector (ADMIN only) */}
                 {!isRecruiterScopedRole && (
                   <FormField label="Client" htmlFor="bulk_client_id">
-                    <FormSelect
-                      id="bulk_client_id"
+                    <SearchSelect
+                      inputId="bulk_client_id"
+                      options={clients.map((c) => ({ label: c.name, value: String(c.id) }))}
                       value={bulkUploadClientId}
-                      onChange={(event) => {
-                        setBulkUploadClientId(event.target.value)
-                        setBulkUploadJdId('')
-                      }}
-                      required
-                    >
-                      <option value="">Select client</option>
-                      {clients.map((client) => (
-                        <option key={client.id} value={client.id}>{client.name}</option>
-                      ))}
-                    </FormSelect>
+                      onChange={(val) => { setBulkUploadClientId(val || ''); setBulkUploadJdId('') }}
+                      placeholder="Select client"
+                    />
                   </FormField>
                 )}
 
                 {/* JD selector */}
                 <FormField label="Job Description" htmlFor="bulk_jd_id">
-                  <FormSelect
-                    id="bulk_jd_id"
+                  <SearchSelect
+                    inputId="bulk_jd_id"
+                    options={bulkUploadJdsForForm.map((jd) => ({ label: jd.title, value: String(jd.id) }))}
                     value={bulkUploadJdId}
-                    onChange={(event) => setBulkUploadJdId(event.target.value)}
-                    required
-                  >
-                    <option value="">Select JD</option>
-                    {bulkUploadJdsForForm.length === 0 && isRecruiterScopedRole ? (
-                      <option value="" disabled>No job descriptions assigned to you. Contact your manager.</option>
-                    ) : null}
-                    {bulkUploadJdsForForm.map((jd) => (
-                      <option key={jd.id} value={jd.id}>{jd.title}</option>
-                    ))}
-                  </FormSelect>
+                    onChange={(val) => setBulkUploadJdId(val || '')}
+                    placeholder="Select JD"
+                    noOptionsMessage={isRecruiterScopedRole ? 'No JDs assigned to you. Contact your manager.' : 'No options'}
+                  />
                 </FormField>
 
                 {/* File upload area */}
@@ -1024,7 +1112,7 @@ export default function Candidates() {
 
                 {/* File errors */}
                 {Object.keys(bulkUploadErrors).length > 0 && (
-                  <AlertBanner type="error" message={`${Object.keys(bulkUploadErrors).length} file(s) exceed size limit`} />
+                  <AlertBanner type="error" message={`${Object.keys(bulkUploadErrors).length} upload issue(s) found`} />
                 )}
 
                 {/* Upload button */}
@@ -1066,6 +1154,29 @@ export default function Candidates() {
                   }} disabled={bulkUploadCreating}>
                     Back to Upload
                   </SecondaryBtn>
+                </div>
+              </div>
+
+              <div className="mb-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
+                <div className="grid grid-cols-3 gap-4 text-center">
+                  <div>
+                    <p className="text-sm text-slate-500">Total Extracted</p>
+                    <p className="text-2xl font-semibold text-blue-600">
+                      {bulkUploadDrafts.length}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-500">Duplicates</p>
+                    <p className="text-2xl font-semibold text-amber-600">
+                      {bulkUploadDuplicateCount}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-500">Errors Found</p>
+                    <p className="text-2xl font-semibold text-red-600">
+                      {bulkUploadIssuesCount}
+                    </p>
+                  </div>
                 </div>
               </div>
 
@@ -1230,30 +1341,6 @@ export default function Candidates() {
                 </table>
               </div>
 
-              {/* Summary stats */}
-              <div className="mt-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
-                <div className="grid grid-cols-3 gap-4 text-center">
-                  <div>
-                    <p className="text-sm text-slate-500">Created</p>
-                    <p className="text-2xl font-semibold text-green-600">
-                      {bulkUploadCreatedCount}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-slate-500">Ready / Pending</p>
-                    <p className="text-2xl font-semibold text-blue-600">
-                      {bulkUploadPendingCount}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-slate-500">Errors</p>
-                    <p className="text-2xl font-semibold text-red-600">
-                      {bulkUploadErrorCount}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
               {/* Done button */}
               <div className="flex flex-wrap gap-2 mt-4">
                 <PrimaryBtn onClick={handleBulkCreateCandidates} loading={bulkUploadCreating} disabled={bulkUploadCreating || bulkUploadDrafts.length === 0}>
@@ -1271,22 +1358,21 @@ export default function Candidates() {
       {/* Candidates table */}
       <Card>
         <DataTable
-          headers={['Name', 'Email', 'Phone', 'Skills', 'Client', 'Job Description', 'Status', 'Actions']}
+          headers={isRecruiterScopedRole
+            ? ['Name', 'Email', 'Phone', 'Skills', 'Job Description', 'Status', 'Uploaded At (IST)', 'Actions']
+            : ['Name', 'Email', 'Phone', 'Skills', 'Client', 'Job Description', 'Status', 'Uploaded At (IST)', 'Actions']}
           loading={isLoading}
           loadingLabel="Loading candidates..."
         >
           {candidates.length === 0 && !isLoading ? (
-            <tr><td colSpan={8}><EmptyState message="No candidates found" /></td></tr>
+            <tr><td colSpan={isRecruiterScopedRole ? 8 : 9}><EmptyState message="No candidates found" /></td></tr>
           ) : (
             candidates.map((candidate) => (
               <TableRow key={candidate.id}>
                 <TableCell>
-                  <div className="flex items-center gap-2.5">
-                    <Avatar name={candidate.full_name} />
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-slate-900">{candidate.full_name}</span>
-                      <Badge variant="gray">{interviewCounts[candidate.id] || 0} interviews</Badge>
-                    </div>
+                  <div>
+                    <div className="font-medium text-slate-900">{candidate.full_name}</div>
+                    <Badge variant="gray">{interviewCounts[candidate.id] || 0} interviews</Badge>
                   </div>
                 </TableCell>
                 <TableCell className="text-slate-500">{candidate.email}</TableCell>
@@ -1305,9 +1391,11 @@ export default function Candidates() {
                     '—'
                   )}
                 </TableCell>
-                <TableCell>{clientMap.get(candidate.client_id) || `Client #${candidate.client_id}`}</TableCell>
-                <TableCell className="max-w-[180px]">
-                  <div className="truncate text-slate-600">{jdMap.get(candidate.jd_id)?.title || `JD #${candidate.jd_id}`}</div>
+                {!isRecruiterScopedRole && (
+                  <TableCell>{clientMap.get(candidate.client_id) || `Client #${candidate.client_id}`}</TableCell>
+                )}
+                <TableCell className="max-w-[220px]">
+                  <div className="text-slate-600 whitespace-normal break-words leading-snug">{jdMap.get(candidate.jd_id)?.title || `JD #${candidate.jd_id}`}</div>
                 </TableCell>
                 <TableCell>
                   {!isPanelist ? (
@@ -1330,12 +1418,15 @@ export default function Candidates() {
                     <Badge variant={STATUS_VARIANTS[candidate.status] || 'gray'}>{candidate.status}</Badge>
                   )}
                 </TableCell>
+                <TableCell className="text-slate-500 whitespace-nowrap">
+                  {formatDateTimeInIST(candidate.resume_uploaded_at)}
+                </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">
                     {!isPanelist && (
                       <button
                         type="button"
-                        onClick={() => navigate(`/interviews?candidateId=${candidate.id}`)}
+                        onClick={() => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}`)}
                         className="text-xs bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
                       >
                         Schedule Interview

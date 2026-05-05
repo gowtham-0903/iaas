@@ -1,4 +1,164 @@
 /* Reusable UI primitives shared across pages */
+import ReactSelect from 'react-select'
+import CreatableSelect from 'react-select/creatable'
+import makeAnimated from 'react-select/animated'
+
+const _animatedComponents = makeAnimated()
+
+const _selectStyles = {
+  control: (base, state) => ({
+    ...base,
+    borderColor: state.isFocused ? '#3b82f6' : '#e2e8f0',
+    boxShadow: state.isFocused ? '0 0 0 2px rgba(59,130,246,0.3)' : 'none',
+    borderRadius: '0.75rem',
+    fontSize: '0.875rem',
+    minHeight: '42px',
+    backgroundColor: state.isDisabled ? '#f8fafc' : 'white',
+    cursor: 'pointer',
+    '&:hover': { borderColor: state.isFocused ? '#3b82f6' : '#cbd5e1' },
+  }),
+  indicatorSeparator: () => ({ display: 'none' }),
+  dropdownIndicator: (base, state) => ({
+    ...base,
+    color: state.isFocused ? '#3b82f6' : '#94a3b8',
+    padding: '0 8px',
+    transition: 'color 0.15s',
+    '&:hover': { color: '#3b82f6' },
+  }),
+  clearIndicator: (base) => ({
+    ...base,
+    color: '#94a3b8',
+    padding: '0 4px',
+    '&:hover': { color: '#64748b' },
+  }),
+  placeholder: (base) => ({ ...base, color: '#94a3b8', fontSize: '0.875rem' }),
+  singleValue: (base) => ({ ...base, color: '#0f172a', fontSize: '0.875rem' }),
+  input: (base) => ({
+    ...base,
+    color: '#0f172a',
+    fontSize: '0.875rem',
+    border: 'none',
+    outline: 'none',
+    boxShadow: 'none',
+    background: 'transparent',
+    margin: 0,
+    padding: 0,
+  }),
+  option: (base, state) => ({
+    ...base,
+    fontSize: '0.875rem',
+    borderRadius: '0.5rem',
+    padding: '8px 10px',
+    backgroundColor: state.isSelected ? '#3b82f6' : state.isFocused ? '#eff6ff' : 'white',
+    color: state.isSelected ? 'white' : '#0f172a',
+    cursor: 'pointer',
+    '&:active': { backgroundColor: state.isSelected ? '#2563eb' : '#dbeafe' },
+  }),
+  menu: (base) => ({
+    ...base,
+    borderRadius: '0.75rem',
+    border: '1px solid #e2e8f0',
+    boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
+    overflow: 'hidden',
+  }),
+  menuList: (base) => ({ ...base, padding: '4px' }),
+  menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+  multiValue: (base) => ({
+    ...base,
+    backgroundColor: '#eff6ff',
+    borderRadius: '6px',
+    border: '1px solid #bfdbfe',
+  }),
+  multiValueLabel: (base) => ({
+    ...base,
+    color: '#1d4ed8',
+    fontSize: '0.75rem',
+    padding: '2px 6px',
+    fontWeight: '500',
+  }),
+  multiValueRemove: (base) => ({
+    ...base,
+    color: '#60a5fa',
+    borderRadius: '0 6px 6px 0',
+    padding: '0 4px',
+    '&:hover': { backgroundColor: '#dbeafe', color: '#1e40af' },
+  }),
+  valueContainer: (base) => ({ ...base, padding: '2px 10px', gap: '4px' }),
+}
+
+// ─── Search Select ─────────────────────────────────────────────────────────────
+export function SearchSelect({
+  options = [],
+  value,
+  onChange,
+  isMulti = false,
+  placeholder = 'Search and select...',
+  isDisabled = false,
+  isClearable = false,
+  noOptionsMessage,
+  ...rest
+}) {
+  const selected = isMulti
+    ? options.filter((opt) => (value || []).map(String).includes(String(opt.value)))
+    : (value !== '' && value != null)
+      ? options.find((opt) => String(opt.value) === String(value)) || null
+      : null
+
+  function handleChange(selectedOption) {
+    if (isMulti) {
+      onChange((selectedOption || []).map((opt) => opt.value))
+    } else {
+      onChange(selectedOption?.value ?? '')
+    }
+  }
+
+  return (
+    <ReactSelect
+      options={options}
+      value={selected}
+      onChange={handleChange}
+      isMulti={isMulti}
+      placeholder={placeholder}
+      isDisabled={isDisabled}
+      isClearable={isClearable}
+      components={_animatedComponents}
+      styles={_selectStyles}
+      menuPortalTarget={typeof document !== 'undefined' ? document.body : null}
+      noOptionsMessage={noOptionsMessage ? () => noOptionsMessage : undefined}
+      {...rest}
+    />
+  )
+}
+
+// ─── Email Tag Select ──────────────────────────────────────────────────────────
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+export function EmailTagSelect({ value = [], onChange, placeholder = 'Type an email and press Enter...', inputId, isDisabled = false }) {
+  const selected = (value || []).map((email) => ({ label: email, value: email }))
+
+  function handleChange(options) {
+    onChange((options || []).map((opt) => opt.value))
+  }
+
+  return (
+    <CreatableSelect
+      inputId={inputId}
+      isMulti
+      isClearable
+      components={{ ...makeAnimated(), DropdownIndicator: null }}
+      options={[]}
+      value={selected}
+      onChange={handleChange}
+      isDisabled={isDisabled}
+      placeholder={placeholder}
+      isValidNewOption={(inputValue) => EMAIL_RE.test(inputValue.trim())}
+      formatCreateLabel={(inputValue) => `Add "${inputValue}"`}
+      styles={_selectStyles}
+      menuPortalTarget={typeof document !== 'undefined' ? document.body : null}
+      noOptionsMessage={() => null}
+    />
+  )
+}
 
 // ─── Alert Banner ─────────────────────────────────────────────────────────────
 export function AlertBanner({ type = 'error', message }) {

@@ -15,6 +15,7 @@ import ScoreReport from './pages/ScoreReport'
 import Users from './pages/Users'
 import SkillExtractionHub from './pages/SkillExtractionHub'
 import PanelistSlots from './pages/PanelistSlots'
+import PanelistAssignments from './pages/PanelistAssignments'
 
 function DashboardEntry() {
   const userRole = useAuthStore((state) => state.user?.role)
@@ -48,6 +49,7 @@ export default function App() {
           <Route path="/client-dashboard" element={<ProtectedRoute allowedRoles={['CLIENT']}><ClientDashboard /></ProtectedRoute>} />
           <Route path="/clients" element={<Clients />} />
           <Route path="/interviews" element={<Interviews />} />
+          <Route path="/panelist-assignments" element={<ProtectedRoute allowedRoles={['ADMIN', 'M_RECRUITER', 'SR_RECRUITER', 'OPERATOR']}><PanelistAssignments /></ProtectedRoute>} />
           <Route path="/jd" element={<JDManagement />} />
           <Route path="/candidates" element={<Candidates />} />
           <Route path="/feedback" element={<FeedbackEntry />} />

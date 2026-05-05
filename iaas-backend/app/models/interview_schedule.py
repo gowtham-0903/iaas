@@ -13,6 +13,9 @@ class InterviewSchedule(db.Model):
     duration_minutes = db.Column(db.Integer, nullable=True, default=60)
     mode = db.Column(db.String(32), nullable=False)
     meeting_link = db.Column(db.String(500), nullable=True)
+    timezone = db.Column(db.String(100), nullable=False, default="America/New_York")
+    external_event_id = db.Column(db.String(500), nullable=True)
+    teams_meeting_id = db.Column(db.String(500), nullable=True)
     notes = db.Column(db.Text, nullable=True)
     status = db.Column(
         db.Enum("SCHEDULED", "IN_PROGRESS", "COMPLETED", "CANCELLED", name="interview_status_enum"),

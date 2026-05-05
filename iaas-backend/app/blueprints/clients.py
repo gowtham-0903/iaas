@@ -107,7 +107,7 @@ def _enrich_clients_with_metrics(clients):
 @jwt_required()
 def create_client():
     role = get_jwt().get("role")
-    if role not in {UserRole.ADMIN.value, UserRole.M_RECRUITER.value}:
+    if role != UserRole.ADMIN.value:
         return jsonify({"message": "Forbidden"}), 403
 
     payload = request.get_json(silent=True) or {}

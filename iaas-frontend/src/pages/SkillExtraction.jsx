@@ -156,13 +156,14 @@ export default function SkillExtraction() {
       setSuccess('')
 
 
-      await extractSkills(jdId)
+      const extractResponse = await extractSkills(jdId)
+      const jdResponse = await getJD(jdId)
       const skillsResponse = await getSkills(jdId)
       const refreshedSkills = skillsResponse.data?.skills ?? []
 
-
+      setJD(jdResponse.data?.jd ?? null)
       setSkillCards(refreshedSkills.map(buildCard))
-      setSuccess('Skills extracted successfully.')
+      setSuccess(extractResponse.data?.cached ? 'Existing extracted skills loaded.' : 'Skills extracted successfully.')
     } catch (extractError) {
       setError('AI extraction failed — you can add skills manually')
     } finally {
@@ -502,14 +503,21 @@ export default function SkillExtraction() {
             >
               {isDownloadingPdf ? 'Downloading...' : 'PDF'}
             </SecondaryBtn>
-            <PrimaryBtn
-              disabled={isExtracting || !jd?.raw_text}
-              onClick={handleExtract}
-              title={!jd?.raw_text ? 'Upload a JD file or paste text before extracting skills' : undefined}
-              loading={isExtracting}
-            >
-              {isExtracting ? 'Analysing...' : 'Extract Skills'}
-            </PrimaryBtn>
+            {skillCards.length > 0 ? (
+              <SecondaryBtn disabled>
+                Skills Extracted
+                {jd?.skills_extracted_at ? ` on ${new Date(jd.skills_extracted_at).toLocaleDateString()}` : ''}
+              </SecondaryBtn>
+            ) : (
+              <PrimaryBtn
+                disabled={isExtracting || !jd?.raw_text}
+                onClick={handleExtract}
+                title={!jd?.raw_text ? 'Upload a JD file or paste text before extracting skills' : undefined}
+                loading={isExtracting}
+              >
+                {isExtracting ? 'Analysing...' : 'Extract Skills'}
+              </PrimaryBtn>
+            )}
           </div>
         </div>
 
