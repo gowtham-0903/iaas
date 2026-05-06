@@ -113,6 +113,9 @@ jobs:
     name: Deploy to Production
     needs: build-and-push
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
 
     steps:
       - name: Checkout
@@ -137,7 +140,7 @@ jobs:
             iaas-deploy@${{ secrets.DO_DROPLET_IP }} << 'ENDSSH'
           set -e
           cd /opt/iaas
-          echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           export IMAGE_TAG=${{ github.sha }}
           docker compose pull
           docker compose up -d --remove-orphans
