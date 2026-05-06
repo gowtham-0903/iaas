@@ -44,8 +44,8 @@ beforeEach(() => {
 describe('Login page — rendering', () => {
   it('renders email and password inputs', () => {
     renderLogin()
-    expect(screen.getByPlaceholderText(/email/i)).toBeInTheDocument()
-    expect(screen.getByPlaceholderText(/password/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/email address/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
   })
 
   it('renders sign-in button', () => {
@@ -70,7 +70,7 @@ describe('Login page — validation', () => {
 
   it('shows error when password is empty on submit', async () => {
     renderLogin()
-    fireEvent.change(screen.getByPlaceholderText(/email/i), {
+    fireEvent.change(screen.getByLabelText(/email address/i), {
       target: { value: 'user@test.com' },
     })
     fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
@@ -85,8 +85,8 @@ describe('Login page — successful login', () => {
     login.mockResolvedValueOnce({ data: { user: { id: 1, role: 'ADMIN', email: 'admin@test.com' } } })
     renderLogin()
 
-    fireEvent.change(screen.getByPlaceholderText(/email/i), { target: { value: 'admin@test.com' } })
-    fireEvent.change(screen.getByPlaceholderText(/password/i), { target: { value: 'Admin@1234' } })
+    fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'admin@test.com' } })
+    fireEvent.change(screen.getByLabelText(/password/i), { target: { value: 'Admin@1234' } })
     fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
 
     await waitFor(() => {
@@ -98,8 +98,8 @@ describe('Login page — successful login', () => {
     login.mockResolvedValueOnce({ data: { user: { id: 1, role: 'ADMIN', email: 'admin@test.com' } } })
     renderLogin()
 
-    fireEvent.change(screen.getByPlaceholderText(/email/i), { target: { value: 'admin@test.com' } })
-    fireEvent.change(screen.getByPlaceholderText(/password/i), { target: { value: 'Admin@1234' } })
+    fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'admin@test.com' } })
+    fireEvent.change(screen.getByLabelText(/password/i), { target: { value: 'Admin@1234' } })
     fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
 
     await waitFor(() => {
@@ -111,8 +111,8 @@ describe('Login page — successful login', () => {
     login.mockResolvedValueOnce({ data: { user: { id: 2, role: 'CLIENT', email: 'client@test.com' } } })
     renderLogin()
 
-    fireEvent.change(screen.getByPlaceholderText(/email/i), { target: { value: 'client@test.com' } })
-    fireEvent.change(screen.getByPlaceholderText(/password/i), { target: { value: 'Pass@1234' } })
+    fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'client@test.com' } })
+    fireEvent.change(screen.getByLabelText(/password/i), { target: { value: 'Pass@1234' } })
     fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
 
     await waitFor(() => {
@@ -128,8 +128,8 @@ describe('Login page — failed login', () => {
     })
     renderLogin()
 
-    fireEvent.change(screen.getByPlaceholderText(/email/i), { target: { value: 'bad@test.com' } })
-    fireEvent.change(screen.getByPlaceholderText(/password/i), { target: { value: 'wrong' } })
+    fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'bad@test.com' } })
+    fireEvent.change(screen.getByLabelText(/password/i), { target: { value: 'wrong' } })
     fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
 
     await waitFor(() => {
@@ -141,8 +141,8 @@ describe('Login page — failed login', () => {
     login.mockRejectedValueOnce(new Error('Network Error'))
     renderLogin()
 
-    fireEvent.change(screen.getByPlaceholderText(/email/i), { target: { value: 'bad@test.com' } })
-    fireEvent.change(screen.getByPlaceholderText(/password/i), { target: { value: 'wrong' } })
+    fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'bad@test.com' } })
+    fireEvent.change(screen.getByLabelText(/password/i), { target: { value: 'wrong' } })
     fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
 
     await waitFor(() => {
