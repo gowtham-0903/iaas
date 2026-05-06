@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import (
     create_access_token,
@@ -19,6 +21,18 @@ from app.schemas.user_schema import user_schema
 
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
+
+_REVOKED_TOKEN_TTL_DAYS = 7
+
+
+def _cleanup_expired_revoked_tokens():
+    """Delete revoked tokens older than the refresh token TTL (lazy cleanup on login)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_REVOKED_TOKEN_TTL_DAYS)
+    try:
+        RevokedToken.query.filter(RevokedToken.revoked_at < cutoff).delete()
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
 
 
 def jwt_refresh_token_required(fn):
@@ -49,6 +63,8 @@ def login():
     if user is None or not user.check_password(password):
         return jsonify({"error": "Invalid credentials"}), 401
 
+    _cleanup_expired_revoked_tokens()
+
     access_token = create_access_token(identity=str(user.id), additional_claims=_token_claims_for_user(user))
     refresh_token = create_refresh_token(identity=str(user.id), additional_claims=_token_claims_for_user(user))
 
@@ -62,7 +78,7 @@ def login():
 @jwt_refresh_token_required
 def refresh():
     user_id = get_jwt_identity()
-    user = User.query.get(int(user_id))
+    user = db.session.get(User, int(user_id))
     if user is None or not user.is_active:
         return jsonify({"error": "Invalid credentials"}), 401
 
@@ -91,7 +107,7 @@ def logout():
 @jwt_required()
 def me():
     user_id = get_jwt_identity()
-    user = User.query.get(int(user_id))
+    user = db.session.get(User, int(user_id))
     if user is None:
         return jsonify({"message": "User not found"}), 404
 

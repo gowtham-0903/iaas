@@ -6,14 +6,12 @@ import Dashboard from './pages/Dashboard'
 import ClientDashboard from './pages/ClientDashboard'
 import Interviews from './pages/Interviews'
 import JDManagement from './pages/JDManagement'
-import SkillExtraction from './pages/SkillExtraction'
 import Candidates from './pages/Candidates'
 import Clients from './pages/Clients'
 import FeedbackForm from './pages/FeedbackForm'
 import QCReview from './pages/QCReview'
 import ScoreReport from './pages/ScoreReport'
 import Users from './pages/Users'
-import SkillExtractionHub from './pages/SkillExtractionHub'
 import PanelistSlots from './pages/PanelistSlots'
 import PanelistAssignments from './pages/PanelistAssignments'
 
@@ -47,9 +45,9 @@ export default function App() {
         <Route element={<ProtectedRoute />}>
           <Route path="/dashboard" element={<DashboardEntry />} />
           <Route path="/client-dashboard" element={<ProtectedRoute allowedRoles={['CLIENT']}><ClientDashboard /></ProtectedRoute>} />
-          <Route path="/clients" element={<Clients />} />
+          <Route path="/clients" element={<ProtectedRoute allowedRoles={['ADMIN']}><Clients /></ProtectedRoute>} />
           <Route path="/interviews" element={<Interviews />} />
-          <Route path="/panelist-assignments" element={<ProtectedRoute allowedRoles={['ADMIN', 'M_RECRUITER', 'SR_RECRUITER', 'OPERATOR']}><PanelistAssignments /></ProtectedRoute>} />
+          <Route path="/panelist-assignments" element={<ProtectedRoute allowedRoles={['ADMIN', 'OPERATOR']}><PanelistAssignments /></ProtectedRoute>} />
           <Route path="/jd" element={<JDManagement />} />
           <Route path="/candidates" element={<Candidates />} />
           <Route path="/feedback" element={<FeedbackEntry />} />
@@ -58,9 +56,9 @@ export default function App() {
           <Route path="/users" element={<Users />} />
           <Route path="/slots" element={<ProtectedRoute allowedRoles={['PANELIST', 'ADMIN']}><PanelistSlots /></ProtectedRoute>} />
         </Route>
-        <Route path="/skill-extraction" element={<ProtectedRoute><SkillExtractionHub /></ProtectedRoute>} />
-        <Route path="/skill-extraction/:jdId" element={<ProtectedRoute><SkillExtraction /></ProtectedRoute>} />
         <Route path="/jd-management" element={<Navigate to="/jd" replace />} />
+        <Route path="/skill-extraction" element={<Navigate to="/jd" replace />} />
+        <Route path="/skill-extraction/:jdId" element={<Navigate to="/jd" replace />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </BrowserRouter>

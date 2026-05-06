@@ -8,7 +8,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 import sqlalchemy as sa
 
-from app.extensions import db
+from app.extensions import db, limiter
 from app.models.candidate import Candidate
 from app.models.jd_recruiter_assignment import JDRecruiterAssignment
 from app.models.jd_skill import JDSkill
@@ -44,6 +44,8 @@ LIST_ALLOWED_ROLES = {
 STATUS_UPDATE_ROLES = {
     UserRole.OPERATOR.value,
     UserRole.ADMIN.value,
+    UserRole.M_RECRUITER.value,
+    UserRole.SR_RECRUITER.value,
 }
 
 AVAILABILITY_WRITE_ROLES = {
@@ -76,7 +78,7 @@ def _get_current_user() -> Optional[User]:
     user_id = get_jwt_identity()
     if user_id is None:
         return None
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 
 
 def _parse_iso_datetime(value: str) -> Optional[datetime]:
@@ -327,6 +329,7 @@ def _get_interview_by_id(interview_id: int, role: str, user: User):
 
 @interviews_bp.post("")
 @jwt_required()
+@limiter.limit("20 per hour")
 def create_interview():
     role = get_jwt().get("role")
     if role not in SCHEDULING_ALLOWED_ROLES:
@@ -393,13 +396,16 @@ def create_interview():
     if len(panelist_ids) > 3:
         return jsonify({"errors": {"panelist_ids": ["panelist_ids must contain 1 to 3 panelists"]}}), 400
 
-    candidate = Candidate.query.get(candidate_id)
+    candidate = db.session.get(Candidate, candidate_id)
     if candidate is None:
         return jsonify({"error": "Candidate not found"}), 404
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
+
+    if jd.status != "ACTIVE":
+        return jsonify({"error": "Interviews can only be scheduled for an ACTIVE job description."}), 400
 
     if candidate.jd_id != jd.id:
         return jsonify({"errors": {"jd_id": ["Candidate does not belong to this JD"]}}), 400
@@ -435,7 +441,7 @@ def create_interview():
     if jd.created_by is not None:
         creator_ids = {r.id for r in assigned_recruiters}
         if jd.created_by not in creator_ids:
-            creator = User.query.get(jd.created_by)
+            creator = db.session.get(User, jd.created_by)
             if creator and creator.is_active:
                 assigned_recruiters.append(creator)
 
@@ -490,8 +496,19 @@ def create_interview():
         return jsonify({"error": "Failed to create interview"}), 500
 
     try:
-        extra_emails = [r.email for r in assigned_recruiters] + additional_emails
-        extra_names = [r.full_name for r in assigned_recruiters] + ["" for _ in additional_emails]
+        seen_extra: set = set()
+        extra_emails: List[str] = []
+        extra_names: List[str] = []
+        for r in assigned_recruiters:
+            if r.email not in seen_extra:
+                seen_extra.add(r.email)
+                extra_emails.append(r.email)
+                extra_names.append(r.full_name)
+        for ae in additional_emails:
+            if ae not in seen_extra:
+                seen_extra.add(ae)
+                extra_emails.append(ae)
+                extra_names.append("")
         meeting = create_teams_interview_event(
             subject=f"Interview: {jd.title} - {candidate.email}",
             start_utc=scheduled_at_utc,
@@ -674,7 +691,7 @@ def create_panelist_availability():
                 return jsonify({"errors": {"panelist_id": ["panelist_id must be a positive integer"]}}), 400
             panelist_id = requested_panelist_id
 
-    panelist = User.query.get(panelist_id)
+    panelist = db.session.get(User, panelist_id)
     if panelist is None or panelist.role != UserRole.PANELIST.value:
         return jsonify({"error": "Target user must have PANELIST role"}), 400
 

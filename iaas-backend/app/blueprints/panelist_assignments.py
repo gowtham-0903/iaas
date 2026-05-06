@@ -33,7 +33,7 @@ def _get_current_user() -> Optional[User]:
     user_id = get_jwt_identity()
     if user_id is None:
         return None
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 
 
 def _normalize_text(value: Any) -> str:
@@ -184,13 +184,13 @@ def create_panelist_assignment():
     if error:
         return error
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
     if jd.client_id != client_id:
         return jsonify({"errors": {"client_id": ["JD does not belong to the specified client"]}}), 400
 
-    panelist = User.query.get(panelist_id)
+    panelist = db.session.get(User, panelist_id)
     if panelist is None or panelist.role != UserRole.PANELIST.value:
         return jsonify({"errors": {"panelist_id": ["User must exist and have PANELIST role"]}}), 400
 
@@ -224,7 +224,7 @@ def delete_panelist_assignment(assignment_id: int):
     if current_user is None:
         return jsonify({"message": "User not found"}), 404
 
-    assignment = JDPanelistAssignment.query.get(assignment_id)
+    assignment = db.session.get(JDPanelistAssignment, assignment_id)
     if assignment is None:
         return jsonify({"error": "Assignment not found"}), 404
 

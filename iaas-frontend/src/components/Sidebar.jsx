@@ -37,15 +37,6 @@ const defaultNavigationSections = [
         ),
       },
       {
-        label: 'AI Skill Extraction',
-        to: '/skill-extraction',
-        icon: (
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-          </svg>
-        ),
-      },
-      {
         label: 'Candidates',
         to: '/candidates',
         icon: (
@@ -290,7 +281,7 @@ export default function Sidebar({ logoSubtitle = 'Admin Panel' }) {
       return item.to === '/client-dashboard' || item.to === '/client-dashboard?tab=results'
     }
     if (user?.role === 'OPERATOR') {
-      return !['/qc', '/users', '/skill-extraction'].includes(item.to)
+      return !['/qc', '/users'].includes(item.to)
     }
     if (item.to === '/qc') {
       return ['QC', 'ADMIN'].includes(user?.role)
@@ -302,8 +293,11 @@ export default function Sidebar({ logoSubtitle = 'Admin Panel' }) {
         'SR_RECRUITER',
       ].includes(user?.role)
     }
+    if (item.to === '/clients') {
+      return user?.role === 'ADMIN'
+    }
     if (item.to === '/panelist-assignments') {
-      return ['ADMIN', 'M_RECRUITER', 'SR_RECRUITER', 'OPERATOR'].includes(user?.role)
+      return ['ADMIN', 'OPERATOR'].includes(user?.role)
     }
     return true
   }

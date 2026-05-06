@@ -588,7 +588,7 @@ export default function Users() {
   }, [users, searchQuery, clients])
 
   return (
-    <AppShell pageTitle="Users" pageSubtitle="Manage platform users and their access roles">
+    <AppShell>
       {!canViewUsersPage && (
         <Card>
           <CardTitle>Restricted Access</CardTitle>

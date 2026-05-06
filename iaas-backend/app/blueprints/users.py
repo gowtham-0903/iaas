@@ -19,7 +19,7 @@ RECRUITER_ROLES = {
 
 def _get_current_user():
     user_id = get_jwt_identity()
-    return User.query.get(int(user_id)) if user_id else None
+    return db.session.get(User, int(user_id)) if user_id else None
 
 
 def _serialize_user(user: User) -> dict:
@@ -83,7 +83,7 @@ def _validate_reports_to(target_role, target_client_id, reports_to):
     if reports_to is None:
         return None
 
-    manager = User.query.get(int(reports_to))
+    manager = db.session.get(User, int(reports_to))
 
     if target_role == UserRole.SR_RECRUITER.value:
         if (
@@ -112,17 +112,28 @@ def list_users():
     if current_user is None:
         return jsonify({"message": "User not found"}), 404
 
-    if role in {UserRole.ADMIN.value, UserRole.M_RECRUITER.value, UserRole.SR_RECRUITER.value, UserRole.PANELIST.value, UserRole.OPERATOR.value}:
+    if role == UserRole.ADMIN.value:
         query = User.query.filter(User.id != current_user.id)
-        
-        if role not in {UserRole.ADMIN.value, UserRole.PANELIST.value, UserRole.OPERATOR.value}:
-            # Recruiters see users in their own client
-            query = query.filter(User.client_id == current_user.client_id)
-            
-        users = query.order_by(User.full_name.asc()).all()
-        return jsonify({"users": _serialize_users(users)}), 200
 
-    return jsonify({"message": "Forbidden"}), 403
+    elif role in {UserRole.M_RECRUITER.value, UserRole.SR_RECRUITER.value}:
+        query = User.query.filter(
+            User.id != current_user.id,
+            User.client_id == current_user.client_id,
+        )
+
+    elif role in {UserRole.PANELIST.value, UserRole.OPERATOR.value}:
+        # Panelistsand operators only see other panelistswithin their own client
+        query = User.query.filter(
+            User.id != current_user.id,
+            User.role == UserRole.PANELIST.value,
+            User.client_id == current_user.client_id,
+        )
+
+    else:
+        return jsonify({"message": "Forbidden"}), 403
+
+    users = query.order_by(User.full_name.asc()).all()
+    return jsonify({"users": _serialize_users(users)}), 200
 
 
 @users_bp.get("/by-client/<int:client_id>")
@@ -251,7 +262,7 @@ def update_user(user_id):
     }:
         return jsonify({"message": "Forbidden"}), 403
 
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     if user is None:
         return jsonify({"error": "User not found"}), 404
 
@@ -337,7 +348,7 @@ def delete_user(user_id):
     }:
         return jsonify({"message": "Forbidden"}), 403
 
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     if user is None:
         return jsonify({"error": "User not found"}), 404
 

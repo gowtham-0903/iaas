@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 
 import { getCandidates } from '../api/candidatesApi'
 import { getClients } from '../api/clientsApi'
-import { getInterviews, createInterview } from '../api/interviewsApi'
+import { getInterviews, createInterview, updateInterviewStatus } from '../api/interviewsApi'
 import { getJDs } from '../api/jdApi'
 import { getUsers } from '../api/usersApi'
 import useAuthStore from '../store/authStore'
@@ -85,9 +85,26 @@ function formatLocalDateTime(isoString, timezone) {
   }
 }
 
+function formatISTDateTime(isoString) {
+  if (!isoString) return '—'
+  try {
+    return new Date(isoString).toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }) + ' IST'
+  } catch {
+    return isoString
+  }
+}
+
 export default function Interviews() {
   const user = useAuthStore((state) => state.user)
   const canSchedule = ['OPERATOR', 'ADMIN', 'M_RECRUITER', 'SR_RECRUITER'].includes(user?.role)
+  const isRecruiterScopedRole = ['RECRUITER', 'SR_RECRUITER', 'M_RECRUITER'].includes(user?.role)
   const scheduleFormRef = useRef(null)
   const scheduledInterviewsRef = useRef(null)
   const [searchParams] = useSearchParams()
@@ -105,10 +122,31 @@ export default function Interviews() {
   const [isLoading, setIsLoading] = useState(true)
   const [isLoadingJdData, setIsLoadingJdData] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [cancellingId, setCancellingId] = useState(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  const jdOptions = useMemo(() => jds.map((jd) => ({ value: String(jd.id), label: jd.title })), [jds])
+  const jdOptions = useMemo(() => {
+    const visibleJds = isRecruiterScopedRole
+      ? jds.filter((jd) => String(jd.client_id) === String(user?.client_id) && jd.status === 'ACTIVE')
+      : jds.filter((jd) => jd.status === 'ACTIVE')
+    return visibleJds.map((jd) => ({ value: String(jd.id), label: jd.title }))
+  }, [jds, isRecruiterScopedRole, user?.client_id])
+
+  const filteredInterviews = useMemo(() => {
+    if (!isRecruiterScopedRole) return interviews
+    const clientJdIds = new Set(
+      jds.filter((jd) => String(jd.client_id) === String(user?.client_id)).map((jd) => jd.id)
+    )
+    return interviews.filter((iv) => clientJdIds.has(iv.jd_id))
+  }, [interviews, jds, isRecruiterScopedRole, user?.client_id])
+
+  function getClientNameForInterview(interview) {
+    const jd = jds.find((j) => j.id === interview.jd_id)
+    if (!jd) return null
+    const client = clients.find((c) => c.id === jd.client_id)
+    return client?.name || null
+  }
 
   useEffect(() => {
     let active = true
@@ -244,6 +282,28 @@ export default function Interviews() {
     })
   }
 
+  async function handleCancelInterview(interviewId) {
+    if (!window.confirm('Cancel this interview? The Teams meeting will also be cancelled.')) return
+    try {
+      setCancellingId(interviewId)
+      setError('')
+      await updateInterviewStatus(interviewId, 'CANCELLED')
+      await refreshInterviews()
+      setSuccess('Interview cancelled successfully.')
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Failed to cancel interview.')
+    } finally {
+      setCancellingId(null)
+    }
+  }
+
+  function copyMeetingLink(meetingLink) {
+    if (!meetingLink) return
+    navigator.clipboard.writeText(meetingLink)
+      .then(() => setSuccess('Meeting link copied to clipboard.'))
+      .catch(() => setError('Could not copy link.'))
+  }
+
   async function handleSubmit(event) {
     event.preventDefault()
 
@@ -310,7 +370,7 @@ export default function Interviews() {
   }
 
   return (
-    <AppShell pageTitle="Interviews" pageSubtitle="Schedule and review virtual interview sessions">
+    <AppShell>
       <AlertBanner type="error" message={error} />
       <AlertBanner type="success" message={success} />
 
@@ -493,7 +553,7 @@ export default function Interviews() {
                     onChange={(emails) => setFormData((previous) => ({ ...previous, additional_emails: emails }))}
                     placeholder="Type an email and press Enter to add..."
                   />
-                  <p className="text-xs text-slate-500 mt-1">Press Enter after each email — added to Teams meeting and notified via email.</p>
+                  <p className="text-xs text-slate-500 mt-1">Press Enter after each email — they will receive an interview notification email with the Teams join link.</p>
                 </FormField>
 
                 <FormField label="Notes (optional)" htmlFor="interview_notes">
@@ -517,26 +577,63 @@ export default function Interviews() {
 
       <Card>
         <div ref={scheduledInterviewsRef} />
-        <CardTitle>Scheduled Interviews</CardTitle>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <CardTitle>Scheduled Interviews ({filteredInterviews.length})</CardTitle>
+        </div>
         <DataTable
-          headers={['Candidate Email', 'Candidate Name', 'JD', 'Date & Time', 'Timezone', 'Mode', 'Panelists', 'Status']}
+          headers={['Candidate', 'JD', 'Date & Time (IST)', 'Mode', 'Panelists', 'Status', 'Actions']}
           loading={isLoading}
           loadingLabel="Loading interviews..."
         >
-          {interviews.length === 0 && !isLoading ? (
-            <tr><td colSpan={8}><EmptyState message="No interviews found" /></td></tr>
+          {filteredInterviews.length === 0 && !isLoading ? (
+            <tr><td colSpan={7}><EmptyState message="No interviews found" /></td></tr>
           ) : (
-            interviews.map((interview) => (
+            filteredInterviews.map((interview) => (
               <TableRow key={interview.id}>
-                <TableCell className="font-medium">{interview.candidate_email || '—'}</TableCell>
-                <TableCell>{interview.candidate_name || '—'}</TableCell>
+                <TableCell>
+                  <div className="font-medium text-slate-900">{interview.candidate_name || '—'}</div>
+                  <div className="text-xs text-slate-500">{interview.candidate_email || ''}</div>
+                </TableCell>
                 <TableCell>{interview.jd_title || '—'}</TableCell>
-                <TableCell>{formatLocalDateTime(interview.scheduled_at_local || interview.scheduled_at, interview.timezone)}</TableCell>
-                <TableCell>{interview.timezone || 'America/New_York'}</TableCell>
-                <TableCell>{interview.mode || 'virtual'}</TableCell>
-                <TableCell>{(interview.panelists || []).map((panelist) => panelist.email).join(', ') || '—'}</TableCell>
+                <TableCell>
+                  {isRecruiterScopedRole && getClientNameForInterview(interview) && (
+                    <div className="text-xs text-slate-500 mb-0.5">{getClientNameForInterview(interview)}</div>
+                  )}
+                  <div className="text-sm">{formatISTDateTime(interview.scheduled_at_local || interview.scheduled_at)}</div>
+                </TableCell>
+                <TableCell className="capitalize">{interview.mode || 'virtual'}</TableCell>
+                <TableCell>
+                  <div className="text-sm">
+                    {(interview.panelists || []).map((p) => p.full_name || p.email).join(', ') || '—'}
+                  </div>
+                </TableCell>
                 <TableCell>
                   <Badge variant={INTERVIEW_STATUS_VARIANTS[interview.status] || 'gray'}>{interview.status || 'UNKNOWN'}</Badge>
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {interview.meeting_link && (
+                      <button
+                        type="button"
+                        onClick={() => copyMeetingLink(interview.meeting_link)}
+                        title="Copy meeting link"
+                        className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 transition-colors"
+                      >
+                        Copy Link
+                      </button>
+                    )}
+                    {canSchedule && !['CANCELLED', 'COMPLETED'].includes(interview.status) && (
+                      <button
+                        type="button"
+                        onClick={() => handleCancelInterview(interview.id)}
+                        disabled={cancellingId === interview.id}
+                        title="Cancel interview"
+                        className="text-xs px-2 py-1 rounded bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition-colors disabled:opacity-50"
+                      >
+                        {cancellingId === interview.id ? 'Cancelling…' : 'Cancel'}
+                      </button>
+                    )}
+                  </div>
                 </TableCell>
               </TableRow>
             ))

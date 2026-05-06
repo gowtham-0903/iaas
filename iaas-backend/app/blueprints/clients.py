@@ -21,7 +21,7 @@ def _get_current_user() -> Optional[User]:
     user_id = get_jwt_identity()
     if user_id is None:
         return None
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 
 
 def _can_access_client(role: Optional[str], user: Optional[User], client: Client) -> bool:
@@ -143,7 +143,7 @@ def list_clients():
         if user.client_id is None:
             return jsonify({"clients": []}), 200
 
-        client = Client.query.get(user.client_id)
+        client = db.session.get(Client, user.client_id)
         if client is None:
             return jsonify({"clients": []}), 200
 
@@ -160,7 +160,7 @@ def get_client(client_id):
     if user is None:
         return jsonify({"message": "User not found"}), 404
 
-    client = Client.query.get(client_id)
+    client = db.session.get(Client, client_id)
     if client is None:
         return jsonify({"error": "Client not found"}), 404
 
@@ -189,7 +189,7 @@ def update_client(client_id):
     if role != UserRole.ADMIN.value:
         return jsonify({"message": "Forbidden"}), 403
 
-    client = Client.query.get(client_id)
+    client = db.session.get(Client, client_id)
     if client is None:
         return jsonify({"error": "Client not found"}), 404
 
@@ -219,7 +219,7 @@ def assign_user_to_client(client_id):
     if role != UserRole.ADMIN.value:
         return jsonify({"message": "Forbidden"}), 403
 
-    client = Client.query.get(client_id)
+    client = db.session.get(Client, client_id)
     if client is None:
         return jsonify({"error": "Client not found"}), 404
 
@@ -228,7 +228,7 @@ def assign_user_to_client(client_id):
     if not isinstance(user_id, int):
         return jsonify({"errors": {"user_id": ["Not a valid integer."]}}), 400
 
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     if user is None:
         return jsonify({"error": "User not found"}), 404
 
@@ -245,7 +245,7 @@ def delete_client(client_id):
     if role != UserRole.ADMIN.value:
         return jsonify({"message": "Forbidden"}), 403
 
-    client = Client.query.get(client_id)
+    client = db.session.get(Client, client_id)
     if client is None:
         return jsonify({"error": "Client not found"}), 404
 

@@ -398,24 +398,81 @@ def send_interview_notification_to_additional_recipient(email: str, candidate, i
         meeting_link = _field(interview, "meeting_link")
         duration_minutes = _field(interview, "duration_minutes", 60)
         tz_str = _field(interview, "timezone", "America/New_York")
-        time_display = _format_local_time(_field(interview, "scheduled_at"), tz_str)
+        date_str, time_str, subject_dt = _format_date_parts(_field(interview, "scheduled_at"), tz_str)
 
-        lines = [
-            "Hello,",
-            "",
-            "You have been added as a recipient for the following interview.",
-            f"Candidate: {candidate_name} ({candidate_email})",
-            f"JD Title: {jd_title}",
-            f"Date & Time: {time_display}",
-            f"Duration: {duration_minutes} minutes",
-            "Mode: Microsoft Teams (Virtual)",
-        ]
         if meeting_link:
-            lines.extend(["", f"Teams meeting link: {meeting_link}"])
-        lines.extend(["", "Regards,", "MeedenLabs Team"])
+            link_html = (
+                "<tr><td style='padding:0 0 20px 0;'>"
+                "<p style='font-size:14px;font-weight:700;color:#1a1a1a;margin:0 0 8px 0;'>Teams Meeting Link</p>"
+                f"<a href='{meeting_link}' style='display:inline-block;background:#0078d4;color:#ffffff;"
+                "text-decoration:none;font-size:13px;font-weight:600;padding:10px 22px;border-radius:6px;'>"
+                "Join the Meeting</a>"
+                "</td></tr>"
+            )
+        else:
+            link_html = ""
 
-        subject = f"Interview Notification — {jd_title}"
-        return _send_plain_text_email(email, subject, "\n".join(lines))
+        html = (
+            "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1.0'></head>"
+            "<body style='margin:0;padding:0;background-color:#f3f4f6;font-family:Arial,Helvetica,sans-serif;'>"
+            "<table width='100%' cellpadding='0' cellspacing='0' style='background-color:#f3f4f6;padding:32px 16px;'>"
+            "<tr><td align='center'>"
+            "<table width='600' cellpadding='0' cellspacing='0'"
+            " style='background:#ffffff;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.07);overflow:hidden;max-width:600px;'>"
+            "<tr><td style='background:#0078d4;padding:28px 36px;'>"
+            "<p style='margin:0;color:#ffffff;font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;opacity:0.85;'>Interview Notification</p>"
+            f"<h1 style='margin:6px 0 0 0;color:#ffffff;font-size:22px;font-weight:700;line-height:1.3;'>{jd_title}</h1>"
+            "</td></tr>"
+            "<tr><td style='padding:32px 36px 0 36px;'>"
+            "<table width='100%' cellpadding='0' cellspacing='0'>"
+            "<tr><td style='padding:0 0 16px 0;'>"
+            "<p style='margin:0;font-size:14px;color:#374151;line-height:1.7;'>Hello,</p>"
+            "<p style='margin:8px 0 0 0;font-size:14px;color:#374151;line-height:1.7;'>"
+            f"An interview has been scheduled for <strong>{candidate_name}</strong> ({candidate_email}) "
+            f"for the <strong>{jd_title}</strong> position. You are receiving this notification as an additional recipient.</p>"
+            "</td></tr>"
+            "<tr><td style='padding:0 0 24px 0;'>"
+            "<table width='100%' cellpadding='0' cellspacing='0'"
+            " style='background:#f0f7ff;border-left:4px solid #0078d4;border-radius:4px;padding:18px 20px;'>"
+            "<tr><td>"
+            "<p style='margin:0 0 12px 0;font-size:12px;font-weight:700;color:#0078d4;text-transform:uppercase;letter-spacing:0.5px;'>Interview Details</p>"
+            "<table cellpadding='0' cellspacing='0'>"
+            "<tr>"
+            "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;min-width:80px;'>Candidate</td>"
+            f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{candidate_name}</td>"
+            "</tr><tr>"
+            "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Position</td>"
+            f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{jd_title}</td>"
+            "</tr><tr>"
+            "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Date</td>"
+            f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{date_str}</td>"
+            "</tr><tr>"
+            "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Time</td>"
+            f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{time_str}</td>"
+            "</tr><tr>"
+            "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Duration</td>"
+            f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{duration_minutes} minutes</td>"
+            "</tr><tr>"
+            "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Mode</td>"
+            "<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>Microsoft Teams – Virtual</td>"
+            "</tr>"
+            "</table></td></tr></table>"
+            "</td></tr>"
+            + link_html
+            + "<tr><td style='padding:0 0 32px 0;'>"
+            "<p style='margin:0;font-size:13px;color:#6b7280;'>This is an automated notification. Please do not reply to this email.</p>"
+            "</td></tr>"
+            "</table></td></tr>"
+            "<tr><td style='background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 36px;'>"
+            "<p style='margin:0;font-size:13px;color:#374151;line-height:1.8;'>"
+            "Warm regards,<br><strong>MeedenLabs Team</strong></p>"
+            "</td></tr>"
+            "</table></td></tr></table></body></html>"
+        )
+
+        subject = f"Interview Notification — {jd_title} | {candidate_name} | {subject_dt}"
+        return _send_html_email(email, subject, html)
     except Exception as exc:
         logger.exception("Failed to send additional recipient interview email: %s", exc)
         return False

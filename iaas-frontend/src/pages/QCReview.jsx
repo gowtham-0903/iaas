@@ -195,7 +195,7 @@ export default function QCReview() {
   }
 
   return (
-    <AppShell pageTitle="QC Review" pageSubtitle="Validate completed interviews before results are shared downstream">
+    <AppShell>
       <AlertBanner type="error" message={error} />
       <AlertBanner type="success" message={success} />
 

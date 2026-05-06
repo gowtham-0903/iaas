@@ -9,7 +9,66 @@ env:
   ORG: gowtham-0903
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # JOB 1 — Tests (backend + frontend)
+  # Runs on every push to main. Uses SQLite in-memory — never touches prod DB.
+  # Build and deploy are blocked until all tests pass.
+  # ─────────────────────────────────────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Backend (Python / pytest) ────────────────────────────────────────
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: iaas-backend/requirements.txt
+
+      - name: Install backend dependencies
+        working-directory: iaas-backend
+        run: pip install -r requirements.txt
+
+      - name: Run backend tests
+        working-directory: iaas-backend
+        env:
+          # Tests use SQLite in-memory — no MySQL, no production data touched
+          DATABASE_URL: "sqlite:///:memory:"
+          JWT_SECRET_KEY: "ci-test-secret-key-replace-in-prod"
+          JWT_COOKIE_SECURE: "False"
+          FLASK_ENV: "testing"
+          OPENAI_API_KEY: "test-key"
+          SENDGRID_API_KEY: "test-key"
+          CORS_ORIGINS: "http://localhost:5173"
+        run: pytest --tb=short -q
+
+      # ── Frontend (Node / Vitest) ─────────────────────────────────────────
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: iaas-frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: iaas-frontend
+        run: npm ci
+
+      - name: Run frontend tests
+        working-directory: iaas-frontend
+        run: npm test
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # JOB 2 — Build & push Docker images (only after tests pass)
+  # ─────────────────────────────────────────────────────────────────────────
   build-and-push:
+    name: Build & Push Images
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -47,7 +106,11 @@ jobs:
             ghcr.io/${{ env.ORG }}/iaas-frontend:latest
             ghcr.io/${{ env.ORG }}/iaas-frontend:${{ github.sha }}
 
+  # ─────────────────────────────────────────────────────────────────────────
+  # JOB 3 — Deploy to DigitalOcean (only after build succeeds)
+  # ─────────────────────────────────────────────────────────────────────────
   deploy:
+    name: Deploy to Production
     needs: build-and-push
     runs-on: ubuntu-latest
 
@@ -60,10 +123,10 @@ jobs:
           key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
           script: |
             cd /opt/iaas
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             export IMAGE_TAG=${{ github.sha }}
             docker compose pull
             docker compose up -d --remove-orphans
             docker image prune -f
             sleep 15
-            docker exec iaas-backend flask db upgrade || true
+            docker exec iaas-backend flask db upgrade

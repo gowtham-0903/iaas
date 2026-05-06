@@ -54,7 +54,7 @@ def _get_current_user() -> Optional[User]:
     user_id = get_jwt_identity()
     if user_id is None:
         return None
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 
 
 def _get_upload_paths(jd_id, original_filename):
@@ -93,7 +93,7 @@ def _get_accessible_jd(jd_id):
     if current_user is None:
         return None, (jsonify({"message": "User not found"}), 404)
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return None, (jsonify({"error": "JD not found"}), 404)
 
@@ -124,7 +124,7 @@ def create_jd():
         return jsonify({"message": "User not found"}), 404
 
     client_id = validated_data["client_id"]
-    client = Client.query.get(client_id)
+    client = db.session.get(Client, client_id)
     if client is None:
         return jsonify({"error": "Client not found"}), 404
 
@@ -204,7 +204,7 @@ def get_jd(jd_id):
     if current_user is None:
         return jsonify({"message": "User not found"}), 404
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
@@ -231,7 +231,7 @@ def update_jd_status(jd_id):
     if current_user is None:
         return jsonify({"message": "User not found"}), 404
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
@@ -263,7 +263,7 @@ def close_jd(jd_id):
     if role != UserRole.ADMIN.value:
         return jsonify({"message": "Forbidden"}), 403
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
@@ -284,7 +284,7 @@ def upload_jd_file(jd_id):
     if current_user is None:
         return jsonify({"message": "User not found"}), 404
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
@@ -360,7 +360,7 @@ def extract_jd_skills(jd_id):
     if current_user is None:
         return jsonify({"message": "User not found"}), 404
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
@@ -594,7 +594,7 @@ def assign_recruiters():
     if not isinstance(recruiter_ids, list) or not recruiter_ids:
         return jsonify({"errors": {"recruiter_ids": ["recruiter_ids must be a non-empty list"]}}), 400
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 

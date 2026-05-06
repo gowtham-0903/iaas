@@ -31,7 +31,7 @@ def _get_current_user() -> Optional[User]:
     user_id = get_jwt_identity()
     if user_id is None:
         return None
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 
 
 def _parse_date_arg(name: str) -> tuple[Optional[date], Optional[Any]]:

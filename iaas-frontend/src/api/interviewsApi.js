@@ -15,3 +15,7 @@ export function getPanelistAvailability(params) {
 export function createPanelistAvailability(data) {
   return axiosInstance.post('/api/interviews/panelist-availability', data)
 }
+
+export function updateInterviewStatus(id, status) {
+  return axiosInstance.put(`/api/interviews/${id}/status`, { status })
+}

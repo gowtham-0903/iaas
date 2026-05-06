@@ -124,31 +124,51 @@ export default function Candidates() {
   const clientMap = useMemo(() => new Map(clients.map((client) => [client.id, client.name])), [clients])
 
   const filteredJds = useMemo(() => {
-    if (!selectedClientId) return jds
-    return jds.filter((jd) => String(jd.client_id) === String(selectedClientId))
+    const activeJds = jds.filter((jd) => jd.status === 'ACTIVE')
+    if (!selectedClientId) return activeJds
+    return activeJds.filter((jd) => String(jd.client_id) === String(selectedClientId))
   }, [jds, selectedClientId])
 
   const jdsForForm = useMemo(() => {
     if (!formData.client_id) return []
-    return jds.filter((jd) => String(jd.client_id) === String(formData.client_id))
+    return jds.filter(
+      (jd) => String(jd.client_id) === String(formData.client_id) && jd.status === 'ACTIVE'
+    )
   }, [jds, formData.client_id])
 
   const bulkUploadJdsForForm = useMemo(() => {
     if (isRecruiterScopedRole) {
-      // RECRUITER: backend already filtered to assigned JDs, filter by their client
       if (!recruiterClientId) return []
-      return jds.filter((jd) => String(jd.client_id) === String(recruiterClientId))
+      return jds.filter(
+        (jd) => String(jd.client_id) === String(recruiterClientId) && jd.status === 'ACTIVE'
+      )
     }
     if (bulkUploadClientId) {
-      // SR_RECRUITER/M_RECRUITER/ADMIN: filter by selected client
-      return jds.filter((jd) => String(jd.client_id) === String(bulkUploadClientId))
+      return jds.filter(
+        (jd) => String(jd.client_id) === String(bulkUploadClientId) && jd.status === 'ACTIVE'
+      )
     }
     return []
   }, [jds, isRecruiterScopedRole, recruiterClientId, bulkUploadClientId])
 
-  const bulkUploadErrorCount = bulkUploadDrafts.filter((draft) => draft.createStatus === 'error' || draft.previewStatus === 'failed' || draft.previewStatus === 'rejected').length
-  const bulkUploadDuplicateCount = Object.values(bulkUploadErrors).filter((message) => message.toLowerCase().includes('duplicate')).length
-  const bulkUploadValidationErrorCount = Object.keys(bulkUploadErrors).length - bulkUploadDuplicateCount
+  function isDuplicateDraft(draft) {
+    const err = (draft.previewError || draft.createError || '').toLowerCase()
+    return (
+      (draft.previewStatus === 'rejected' && (err.includes('already exists') || err.includes('duplicate'))) ||
+      (draft.createStatus === 'error' && (err.includes('already exists') || err.includes('duplicate')))
+    )
+  }
+
+  const bulkUploadDuplicateCount =
+    Object.values(bulkUploadErrors).filter((message) => message.toLowerCase().includes('duplicate')).length +
+    bulkUploadDrafts.filter(isDuplicateDraft).length
+
+  const bulkUploadErrorCount = bulkUploadDrafts.filter((draft) => {
+    if (isDuplicateDraft(draft)) return false
+    return draft.createStatus === 'error' || draft.previewStatus === 'failed' || draft.previewStatus === 'rejected'
+  }).length
+
+  const bulkUploadValidationErrorCount = Object.values(bulkUploadErrors).filter((message) => !message.toLowerCase().includes('duplicate')).length
   const bulkUploadIssuesCount = bulkUploadValidationErrorCount + bulkUploadErrorCount
 
   useEffect(() => {
@@ -809,7 +829,7 @@ export default function Candidates() {
   }
 
   return (
-    <AppShell pageTitle="Candidates" pageSubtitle="Track and manage interview candidates">
+    <AppShell>
       {!isPanelist && (
         <div className="flex items-center justify-between mb-5">
           <div />
@@ -855,17 +875,19 @@ export default function Candidates() {
 
       {/* Filters */}
       <Card>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <FormField label="Filter by Client" htmlFor="candidate_filter_client">
-            <SearchSelect
-              inputId="candidate_filter_client"
-              options={clients.map((c) => ({ label: c.name, value: String(c.id) }))}
-              value={selectedClientId}
-              onChange={(val) => { setSelectedClientId(val || ''); setSelectedJdId('') }}
-              placeholder="All clients"
-              isClearable
-            />
-          </FormField>
+        <div className={`grid grid-cols-1 gap-4 ${!isRecruiterScopedRole ? 'sm:grid-cols-2' : ''}`}>
+          {!isRecruiterScopedRole && (
+            <FormField label="Filter by Client" htmlFor="candidate_filter_client">
+              <SearchSelect
+                inputId="candidate_filter_client"
+                options={clients.map((c) => ({ label: c.name, value: String(c.id) }))}
+                value={selectedClientId}
+                onChange={(val) => { setSelectedClientId(val || ''); setSelectedJdId('') }}
+                placeholder="All clients"
+                isClearable
+              />
+            </FormField>
+          )}
           <FormField label="Filter by JD" htmlFor="candidate_filter_jd">
             <SearchSelect
               inputId="candidate_filter_jd"
@@ -1196,13 +1218,17 @@ export default function Candidates() {
                   </thead>
                   <tbody>
                     {bulkUploadDrafts.map((draft) => {
+                      const isDup = isDuplicateDraft(draft)
+
                       const rowStatus = draft.createStatus === 'created'
                         ? 'created'
                         : draft.createStatus === 'creating'
                           ? 'creating'
-                          : draft.createStatus === 'error'
-                            ? 'error'
-                            : draft.previewStatus
+                          : isDup
+                            ? 'duplicate'
+                            : draft.createStatus === 'error'
+                              ? 'error'
+                              : draft.previewStatus
 
                       const normalizedRowStatus = rowStatus === 'success' ? 'ready' : rowStatus
 
@@ -1210,9 +1236,11 @@ export default function Candidates() {
                         ? 'green'
                         : normalizedRowStatus === 'creating'
                           ? 'blue'
-                          : normalizedRowStatus === 'rejected'
+                          : normalizedRowStatus === 'duplicate'
                             ? 'amber'
-                            : 'red'
+                            : normalizedRowStatus === 'rejected'
+                              ? 'amber'
+                              : 'red'
 
                       return (
                         <tr key={draft.id} className="border-b border-slate-200 hover:bg-slate-50 align-top">
@@ -1288,9 +1316,11 @@ export default function Candidates() {
                                     ? 'Creating'
                                     : normalizedRowStatus === 'ready'
                                       ? 'Ready'
-                                      : normalizedRowStatus === 'rejected'
-                                        ? 'Rejected'
-                                        : 'Parse Error'
+                                      : normalizedRowStatus === 'duplicate'
+                                        ? 'Duplicate'
+                                        : normalizedRowStatus === 'rejected'
+                                          ? 'Rejected'
+                                          : 'Parse Error'
                               }</Badge>
                               {draft.previewStatus === 'rejected' && draft.previewError && (
                                 <p className="text-xs text-amber-600 max-w-[220px]">{draft.previewError}</p>

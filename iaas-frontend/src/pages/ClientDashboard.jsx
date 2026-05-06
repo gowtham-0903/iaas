@@ -247,7 +247,7 @@ export default function ClientDashboard() {
   }
 
   return (
-    <AppShell pageTitle="Client Dashboard" pageSubtitle="Track open roles, hiring progress, and approved interview outcomes">
+    <AppShell>
       <AlertBanner type="error" message={error} />
 
       <div className="flex items-center gap-2 mb-5">

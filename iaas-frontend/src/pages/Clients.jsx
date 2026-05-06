@@ -286,7 +286,7 @@ export default function Clients() {
   }
 
   return (
-    <AppShell pageTitle="Clients" pageSubtitle="Manage client accounts and their associated JDs">
+    <AppShell>
       {/* Topbar */}
       <div className="flex items-center justify-between mb-5">
         <div />

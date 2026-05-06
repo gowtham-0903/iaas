@@ -371,7 +371,7 @@ export default function PanelistSlots() {
   }
 
   return (
-    <AppShell pageTitle="Slots & Interviews" pageSubtitle="Manage your availability, interviews, and scoring">
+    <AppShell>
       <AlertBanner type="error" message={error} />
       <AlertBanner type="success" message={success} />
 

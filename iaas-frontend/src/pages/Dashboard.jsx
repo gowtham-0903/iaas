@@ -98,15 +98,6 @@ const QUICK_ACTIONS = [
       </svg>
     ),
   },
-  {
-    label: 'AI Extraction',
-    to: '/skill-extraction',
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-      </svg>
-    ),
-  },
 ]
 
 export default function Dashboard() {
@@ -174,7 +165,7 @@ export default function Dashboard() {
   }, [showInterviewStats])
 
   return (
-    <AppShell pageTitle="Overview" pageSubtitle="Get a quick snapshot of key metrics, candidate data, and pipeline trends">
+    <AppShell>
       {/* ─── Row 1: Stat Cards ─────────────────────────── */}
       {!isPanelist && (
         <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-5">

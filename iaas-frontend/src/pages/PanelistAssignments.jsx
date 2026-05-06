@@ -186,14 +186,14 @@ export default function PanelistAssignments() {
 
   if (!canViewPage) {
     return (
-      <AppShell pageTitle="Panelist Assignments">
+      <AppShell>
         <AlertBanner type="error" message="You do not have access to this page." />
       </AppShell>
     )
   }
 
   return (
-    <AppShell pageTitle="Panelist Assignments" pageSubtitle="Assign panelists to job descriptions">
+    <AppShell>
       <AlertBanner type="error" message={error} />
       <AlertBanner type="success" message={success} />
 

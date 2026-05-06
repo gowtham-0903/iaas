@@ -13,7 +13,7 @@ from werkzeug.utils import secure_filename
 
 from openai import OpenAI
 
-from app.extensions import db
+from app.extensions import db, limiter
 from app.models.candidate import Candidate, CANDIDATE_STATUSES
 from app.models.client import Client
 from app.models.jd_recruiter_assignment import JDRecruiterAssignment
@@ -56,7 +56,7 @@ def _get_current_user() -> Optional[User]:
     user_id = get_jwt_identity()
     if user_id is None:
         return None
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 
 
 def _can_access_client(role: str, user: Optional[User], client_id: int) -> bool:
@@ -207,7 +207,7 @@ def _notify_operators(client_id: int, jd: JobDescription, uploader: User, candid
             return
         operator_ids = [a.operator_id for a in assignments]
         operators = User.query.filter(User.id.in_(operator_ids), User.is_active == True).all()
-        client = Client.query.get(client_id)
+        client = db.session.get(Client, client_id)
         client_name = client.name if client else f"Client #{client_id}"
         for operator in operators:
             send_resume_upload_notification_to_operator(
@@ -266,6 +266,7 @@ def list_candidates():
 
 @candidates_bp.post("")
 @jwt_required()
+@limiter.limit("20 per hour")
 def create_candidate():
     role = get_jwt().get("role")
     if role not in ALLOWED_ROLES:
@@ -310,13 +311,16 @@ def create_candidate():
     if not _can_access_client(role, user, client_id):
         return jsonify({"message": "Forbidden"}), 403
 
-    client = Client.query.get(client_id)
+    client = db.session.get(Client, client_id)
     if client is None:
         return jsonify({"error": "Client not found"}), 404
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
+
+    if jd.status != "ACTIVE":
+        return jsonify({"error": "Candidates can only be created for an ACTIVE job description."}), 400
 
     if jd.client_id != client_id:
         return jsonify({"errors": {"jd_id": ["JD does not belong to this client."]}}), 400
@@ -403,7 +407,8 @@ def create_candidate():
         db.session.rollback()
         if stored_resume_path and os.path.exists(stored_resume_path):
             os.remove(stored_resume_path)
-        return jsonify({"error": f"Failed to create candidate: {str(err)}"}), 500
+        current_app.logger.exception("Candidate creation failed: %s", err)
+        return jsonify({"error": "Internal server error"}), 500
 
     if stored_resume_path:
         _auto_assign_recruiter_to_jd(jd_id, user)
@@ -414,6 +419,7 @@ def create_candidate():
 
 @candidates_bp.post("/bulk-upload-resumes")
 @jwt_required()
+@limiter.limit("30 per hour")
 def bulk_upload_resumes():
     role = get_jwt().get("role")
     BULK_UPLOAD_ALLOWED_ROLES = {
@@ -448,13 +454,16 @@ def bulk_upload_resumes():
     if not _can_access_client(role, user, client_id):
         return jsonify({"message": "Forbidden"}), 403
 
-    client = Client.query.get(client_id)
+    client = db.session.get(Client, client_id)
     if client is None:
         return jsonify({"error": "Client not found"}), 404
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
+
+    if jd.status != "ACTIVE":
+        return jsonify({"error": "Resumes can only be uploaded for an ACTIVE job description."}), 400
 
     if jd.client_id != client_id:
         return jsonify({"errors": {"jd_id": ["JD does not belong to this client."]}}), 400
@@ -623,7 +632,7 @@ def update_candidate(candidate_id):
     if user is None:
         return jsonify({"message": "User not found"}), 404
 
-    candidate = Candidate.query.get(candidate_id)
+    candidate = db.session.get(Candidate, candidate_id)
     if candidate is None:
         return jsonify({"error": "Candidate not found"}), 404
 
@@ -637,7 +646,7 @@ def update_candidate(candidate_id):
         return jsonify({"errors": err.messages}), 400
 
     if "jd_id" in validated:
-        jd = JobDescription.query.get(validated["jd_id"])
+        jd = db.session.get(JobDescription, validated["jd_id"])
         if jd is None:
             return jsonify({"error": "JD not found"}), 404
         if jd.client_id != candidate.client_id:
@@ -648,7 +657,12 @@ def update_candidate(candidate_id):
         candidate.full_name = validated["full_name"].strip()
 
     if "email" in validated:
-        candidate.email = validated["email"].strip().lower()
+        new_email = validated["email"].strip().lower()
+        if new_email != candidate.email:
+            is_blocked, unblock_date = _check_cooling_period(new_email, candidate.jd_id)
+            if is_blocked:
+                return jsonify({"error": f"Candidate was not selected for this JD. Re-apply allowed after {unblock_date}."}), 409
+        candidate.email = new_email
 
     if "phone" in validated:
         phone = validated["phone"]
@@ -673,9 +687,12 @@ def delete_candidate(candidate_id):
     if user is None:
         return jsonify({"message": "User not found"}), 404
 
-    candidate = Candidate.query.get(candidate_id)
+    candidate = db.session.get(Candidate, candidate_id)
     if candidate is None:
         return jsonify({"error": "Candidate not found"}), 404
+
+    if not _can_access_client(role, user, candidate.client_id):
+        return jsonify({"message": "Forbidden"}), 403
 
     db.session.delete(candidate)
     db.session.commit()
@@ -693,7 +710,7 @@ def upload_candidate_resume(candidate_id):
     if user is None:
         return jsonify({"message": "User not found"}), 404
 
-    candidate = Candidate.query.get(candidate_id)
+    candidate = db.session.get(Candidate, candidate_id)
     if candidate is None:
         return jsonify({"error": "Candidate not found"}), 404
 
@@ -733,6 +750,7 @@ def upload_candidate_resume(candidate_id):
 
 @candidates_bp.post("/<int:candidate_id>/extract-resume")
 @jwt_required()
+@limiter.limit("30 per hour")
 def extract_candidate_resume(candidate_id):
     role = get_jwt().get("role")
     if role not in RESUME_ALLOWED_ROLES:
@@ -742,7 +760,7 @@ def extract_candidate_resume(candidate_id):
     if user is None:
         return jsonify({"message": "User not found"}), 404
 
-    candidate = Candidate.query.get(candidate_id)
+    candidate = db.session.get(Candidate, candidate_id)
     if candidate is None:
         return jsonify({"error": "Candidate not found"}), 404
 
@@ -822,7 +840,7 @@ def download_candidate_resume(candidate_id):
     if user is None:
         return jsonify({"message": "User not found"}), 404
 
-    candidate = Candidate.query.get(candidate_id)
+    candidate = db.session.get(Candidate, candidate_id)
     if candidate is None:
         return jsonify({"error": "Candidate not found"}), 404
 
@@ -860,7 +878,7 @@ def notify_operators_bulk():
     if not jd_id or not client_id or candidate_count < 1:
         return jsonify({"message": "jd_id, client_id and candidate_count are required"}), 400
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 

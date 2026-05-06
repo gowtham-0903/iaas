@@ -63,7 +63,7 @@ export default function FeedbackForm() {
   const avgSecondary = ((scores.docker + scores.aws) / 2).toFixed(1)
 
   return (
-    <AppShell logoSubtitle="Panelist view" pageTitle="Interview Feedback" pageSubtitle="Arjun Rajan · Sr. React Dev">
+    <AppShell logoSubtitle="Panelist view">
       <div className="max-w-2xl mx-auto space-y-4">
         {/* Score summary */}
         <div className="grid grid-cols-3 gap-4 mb-2">

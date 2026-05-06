@@ -5,7 +5,7 @@ import { Card, CardTitle } from '../components/ui'
 
 export default function ScoreReport() {
   return (
-    <AppShell pageTitle="Score Report" pageSubtitle="Arjun Rajan · Sr. React Developer">
+    <AppShell>
       {/* Actions topbar */}
       <div className="flex items-center justify-between mb-5">
         <div />
