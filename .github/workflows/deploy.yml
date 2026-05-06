@@ -118,28 +118,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Write SSH key
+        run: |
+          echo "${{ secrets.DO_SSH_PRIVATE_KEY }}" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+
       - name: Copy docker-compose.yml to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DO_DROPLET_IP }}
-          username: iaas-deploy
-          key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
-          source: docker-compose.yml
-          target: /opt/iaas
+        run: |
+          scp -i /tmp/deploy_key \
+            -o StrictHostKeyChecking=no \
+            docker-compose.yml \
+            iaas-deploy@${{ secrets.DO_DROPLET_IP }}:/opt/iaas/docker-compose.yml
 
       - name: Deploy to DigitalOcean Droplet
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.DO_DROPLET_IP }}
-          username: iaas-deploy
-          key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
-          script: |
-            set -e
-            cd /opt/iaas
-            echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            export IMAGE_TAG=${{ github.sha }}
-            docker compose pull
-            docker compose up -d --remove-orphans
-            docker image prune -f
-            sleep 15
-            docker exec iaas-backend flask db upgrade
+        run: |
+          ssh -i /tmp/deploy_key \
+            -o StrictHostKeyChecking=no \
+            iaas-deploy@${{ secrets.DO_DROPLET_IP }} << 'ENDSSH'
+          set -e
+          cd /opt/iaas
+          echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          export IMAGE_TAG=${{ github.sha }}
+          docker compose pull
+          docker compose up -d --remove-orphans
+          docker image prune -f
+          sleep 15
+          docker exec iaas-backend flask db upgrade
+          ENDSSH
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -f /tmp/deploy_key
