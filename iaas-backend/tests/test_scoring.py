@@ -19,59 +19,58 @@ from tests.conftest import auth_headers
 # POST /api/scoring/interviews/<id>/scores
 # ---------------------------------------------------------------------------
 
-def _score_payload(skill_scores=None):
+def _score_payload(skill_id, skill_scores=None):
     return {
         "scores": skill_scores or [
-            {"skill_name": "Python", "skill_type": "primary", "score": 8},
-            {"skill_name": "Communication", "skill_type": "soft", "score": 7},
+            {"skill_id": skill_id, "technical_score": 8, "communication_score": 7, "problem_solving_score": 7},
         ]
     }
 
 
-def test_submit_scores_panelist(app, client, panelist_user, sample_interview):
+def test_submit_scores_panelist(app, client, panelist_user, sample_interview, sample_jd_skills):
     headers = auth_headers(app, panelist_user)
     resp = client.post(
         f"/api/scoring/interviews/{sample_interview.id}/scores",
-        json=_score_payload(),
+        json=_score_payload(sample_jd_skills[0].id),
         headers=headers,
     )
     assert resp.status_code in (200, 201)
 
 
-def test_submit_scores_admin(app, client, admin_user, sample_interview):
+def test_submit_scores_admin(app, client, admin_user, sample_interview, sample_jd_skills):
     headers = auth_headers(app, admin_user)
     resp = client.post(
         f"/api/scoring/interviews/{sample_interview.id}/scores",
-        json=_score_payload(),
+        json=_score_payload(sample_jd_skills[0].id),
         headers=headers,
     )
     assert resp.status_code in (200, 201)
 
 
-def test_submit_scores_recruiter_forbidden(app, client, recruiter_user, sample_interview):
+def test_submit_scores_recruiter_forbidden(app, client, recruiter_user, sample_interview, sample_jd_skills):
     """RECRUITER must not submit scores."""
     headers = auth_headers(app, recruiter_user)
     resp = client.post(
         f"/api/scoring/interviews/{sample_interview.id}/scores",
-        json=_score_payload(),
+        json=_score_payload(sample_jd_skills[0].id),
         headers=headers,
     )
     assert resp.status_code == 403
 
 
-def test_submit_scores_interview_not_found(app, client, panelist_user):
+def test_submit_scores_interview_not_found(app, client, panelist_user, sample_jd_skills):
     headers = auth_headers(app, panelist_user)
     resp = client.post(
         "/api/scoring/interviews/99999/scores",
-        json=_score_payload(),
+        json=_score_payload(sample_jd_skills[0].id),
         headers=headers,
     )
     assert resp.status_code == 404
 
 
-def test_submit_scores_out_of_range(app, client, panelist_user, sample_interview):
+def test_submit_scores_out_of_range(app, client, panelist_user, sample_interview, sample_jd_skills):
     headers = auth_headers(app, panelist_user)
-    payload = {"scores": [{"skill_name": "Python", "skill_type": "primary", "score": 15}]}
+    payload = {"scores": [{"skill_id": sample_jd_skills[0].id, "technical_score": 15, "communication_score": 7, "problem_solving_score": 7}]}
     resp = client.post(
         f"/api/scoring/interviews/{sample_interview.id}/scores",
         json=payload,
@@ -80,9 +79,9 @@ def test_submit_scores_out_of_range(app, client, panelist_user, sample_interview
     assert resp.status_code == 400
 
 
-def test_submit_scores_zero_invalid(app, client, panelist_user, sample_interview):
+def test_submit_scores_zero_invalid(app, client, panelist_user, sample_interview, sample_jd_skills):
     headers = auth_headers(app, panelist_user)
-    payload = {"scores": [{"skill_name": "Python", "skill_type": "primary", "score": 0}]}
+    payload = {"scores": [{"skill_id": sample_jd_skills[0].id, "technical_score": 0, "communication_score": 7, "problem_solving_score": 7}]}
     resp = client.post(
         f"/api/scoring/interviews/{sample_interview.id}/scores",
         json=payload,
@@ -104,12 +103,12 @@ def test_get_scores_empty(app, client, admin_user, sample_interview):
     assert isinstance(scores, list)
 
 
-def test_get_scores_after_submit(app, client, panelist_user, admin_user, sample_interview):
+def test_get_scores_after_submit(app, client, panelist_user, admin_user, sample_interview, sample_jd_skills):
     # Submit first
     panelist_headers = auth_headers(app, panelist_user)
     client.post(
         f"/api/scoring/interviews/{sample_interview.id}/scores",
-        json=_score_payload(),
+        json=_score_payload(sample_jd_skills[0].id),
         headers=panelist_headers,
     )
 

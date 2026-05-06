@@ -9,6 +9,7 @@ import sqlalchemy as sa
 
 from app.extensions import db
 from app.middleware import role_required
+from app.models.feedback_validation import FeedbackValidation
 from app.models.user import User, UserRole
 
 
@@ -135,7 +136,7 @@ def _fetch_jd_skills(jd_id: int) -> List[Dict[str, Any]]:
             SELECT id, skill_name, skill_type
             FROM jd_skills
             WHERE jd_id = :jd_id
-            ORDER BY FIELD(skill_type, 'primary', 'secondary', 'soft'), skill_name
+            ORDER BY CASE skill_type WHEN 'primary' THEN 1 WHEN 'secondary' THEN 2 WHEN 'soft' THEN 3 ELSE 4 END, skill_name
             """
         ),
         {"jd_id": jd_id},
@@ -205,7 +206,7 @@ def _build_panelist_payload(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "communication_score": row["communication_score"],
                 "problem_solving_score": row["problem_solving_score"],
                 "comments": row["comments"],
-                "submitted_at": row["submitted_at"].isoformat() if row["submitted_at"] else None,
+                "submitted_at": row["submitted_at"].isoformat() if hasattr(row["submitted_at"], "isoformat") else row["submitted_at"] if row["submitted_at"] else None,
             }
         )
 
@@ -303,7 +304,7 @@ def _build_review_payload(interview_row: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "interview_id": interview_row["interview_id"],
-        "interview_date": interview_row["scheduled_at"].isoformat() if interview_row["scheduled_at"] else None,
+        "interview_date": interview_row["scheduled_at"].isoformat() if hasattr(interview_row["scheduled_at"], "isoformat") else interview_row["scheduled_at"] if interview_row["scheduled_at"] else None,
         "candidate": {
             "id": interview_row["candidate_id"],
             "full_name": interview_row["candidate_name"],
@@ -326,7 +327,7 @@ def _build_review_payload(interview_row: Dict[str, Any]) -> Dict[str, Any]:
             "strengths": ai_strengths,
             "concerns": ai_concerns,
             "skill_scores": ai_skill_scores,
-            "generated_at": interview_row["generated_at"].isoformat() if interview_row["generated_at"] else None,
+            "generated_at": interview_row["generated_at"].isoformat() if hasattr(interview_row["generated_at"], "isoformat") else interview_row["generated_at"] if interview_row["generated_at"] else None,
             "report_status": interview_row["report_status"],
         },
         "combined_scores": combined_scores,
@@ -338,7 +339,7 @@ def _build_review_payload(interview_row: Dict[str, Any]) -> Dict[str, Any]:
             "current_recommendation": current_recommendation,
             "qc_notes": interview_row["qc_notes"],
             "skill_overrides": raw_skill_overrides if isinstance(raw_skill_overrides, list) else [],
-            "validated_at": interview_row["validated_at"].isoformat() if interview_row["validated_at"] else None,
+            "validated_at": interview_row["validated_at"].isoformat() if hasattr(interview_row["validated_at"], "isoformat") else interview_row["validated_at"] if interview_row["validated_at"] else None,
             "validated_by": interview_row["validated_by"],
         },
     }
@@ -424,7 +425,7 @@ def list_qc_interviews():
             "candidate_name": row["candidate_name"],
             "jd_title": row["jd_title"],
             "client_name": row["client_name"],
-            "interview_date": row["scheduled_at"].isoformat() if row["scheduled_at"] else None,
+            "interview_date": row["scheduled_at"].isoformat() if hasattr(row["scheduled_at"], "isoformat") else row["scheduled_at"] if row["scheduled_at"] else None,
             "panelist_count": int(row["panelist_count"] or 0),
             "ai_recommendation": row["ai_recommendation"],
             "qc_status": row["qc_status"],
@@ -501,39 +502,18 @@ def update_qc_review(interview_id: int):
     validated_at = now if approved else None
     candidate_status = _candidate_status_for_recommendation(final_recommendation)
 
-    db.session.execute(
-        sa.text(
-            """
-            INSERT INTO feedback_validations
-                (interview_id, validated_by, status, final_recommendation, qc_notes,
-                 skill_overrides, approved, validated_at, created_at, updated_at)
-            VALUES
-                (:interview_id, :validated_by, :status, :final_recommendation, :qc_notes,
-                 :skill_overrides, :approved, :validated_at, :created_at, :updated_at)
-            ON DUPLICATE KEY UPDATE
-                validated_by = VALUES(validated_by),
-                status = VALUES(status),
-                final_recommendation = VALUES(final_recommendation),
-                qc_notes = VALUES(qc_notes),
-                skill_overrides = VALUES(skill_overrides),
-                approved = VALUES(approved),
-                validated_at = VALUES(validated_at),
-                updated_at = VALUES(updated_at)
-            """
-        ),
-        {
-            "interview_id": interview_id,
-            "validated_by": current_user.id,
-            "status": validation_status,
-            "final_recommendation": final_recommendation,
-            "qc_notes": qc_notes.strip() if isinstance(qc_notes, str) else None,
-            "skill_overrides": json.dumps(normalized_overrides),
-            "approved": approved,
-            "validated_at": validated_at,
-            "created_at": now,
-            "updated_at": now,
-        },
-    )
+    fv = db.session.query(FeedbackValidation).filter_by(interview_id=interview_id).first()
+    if fv is None:
+        fv = FeedbackValidation(interview_id=interview_id, created_at=now)
+        db.session.add(fv)
+    fv.validated_by = current_user.id
+    fv.status = validation_status
+    fv.final_recommendation = final_recommendation
+    fv.qc_notes = qc_notes.strip() if isinstance(qc_notes, str) else None
+    fv.skill_overrides = json.dumps(normalized_overrides)
+    fv.approved = approved
+    fv.validated_at = validated_at
+    fv.updated_at = now
 
     db.session.execute(
         sa.text(
@@ -583,9 +563,10 @@ def get_qc_dashboard():
             SELECT COUNT(*) AS approved_today
             FROM feedback_validations
             WHERE approved = 1
-              AND DATE(validated_at) = CURRENT_DATE()
+              AND DATE(validated_at) = :today
             """
-        )
+        ),
+        {"today": date.today().isoformat()},
     ).mappings().first()
 
     average_ai_score_row = db.session.execute(

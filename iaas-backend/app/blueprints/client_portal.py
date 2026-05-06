@@ -104,7 +104,7 @@ def _fetch_jd_skills(jd_id: int) -> List[Dict[str, Any]]:
             SELECT id, skill_name, skill_type
             FROM jd_skills
             WHERE jd_id = :jd_id
-            ORDER BY FIELD(skill_type, 'primary', 'secondary', 'soft'), skill_name
+            ORDER BY CASE skill_type WHEN 'primary' THEN 1 WHEN 'secondary' THEN 2 WHEN 'soft' THEN 3 ELSE 4 END, skill_name
             """
         ),
         {"jd_id": jd_id},
@@ -360,7 +360,7 @@ def list_results():
                 "final_recommendation": row["final_recommendation"],
                 "combined_score": overall_score,
                 "qc_notes": row["qc_notes"],
-                "interview_date": row["scheduled_at"].isoformat() if row["scheduled_at"] else None,
+                "interview_date": row["scheduled_at"].isoformat() if hasattr(row["scheduled_at"], "isoformat") else row["scheduled_at"] if row["scheduled_at"] else None,
             }
         )
 
@@ -400,7 +400,7 @@ def get_candidate_report(candidate_id: int):
                 "title": row["jd_title"],
                 "job_code": row["job_code"],
             },
-            "interview_date": row["scheduled_at"].isoformat() if row["scheduled_at"] else None,
+            "interview_date": row["scheduled_at"].isoformat() if hasattr(row["scheduled_at"], "isoformat") else row["scheduled_at"] if row["scheduled_at"] else None,
             "final_recommendation": row["final_recommendation"],
             "overall_score": overall_score,
             "skill_breakdown": skill_breakdown,

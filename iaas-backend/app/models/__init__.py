@@ -1,5 +1,6 @@
 from app.models.candidate import Candidate
 from app.models.client import Client
+from app.models.feedback_validation import FeedbackValidation
 from app.models.interview_schedule import InterviewSchedule, PanelAssignment, PanelistAvailability
 from app.models.jd_panelist_assignment import JDPanelistAssignment
 from app.models.interview_scoring import AIInterviewScore, InterviewScore, InterviewTranscript
@@ -14,6 +15,7 @@ __all__ = [
     "AIInterviewScore",
     "Candidate",
     "Client",
+    "FeedbackValidation",
     "InterviewSchedule",
     "InterviewScore",
     "InterviewTranscript",

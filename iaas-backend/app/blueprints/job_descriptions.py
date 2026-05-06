@@ -41,9 +41,7 @@ ALLOWED_RECRUITER_AND_ABOVE = {
     UserRole.PANELIST.value,
 }
 
-# JD creation requires SR_RECRUITER or above (RECRUITER is view-only per ROLES_AND_ACCESS.md)
 JD_CREATE_ROLES = {
-    UserRole.RECRUITER.value,
     UserRole.SR_RECRUITER.value,
     UserRole.M_RECRUITER.value,
     UserRole.ADMIN.value,

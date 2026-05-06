@@ -64,7 +64,9 @@ def test_create_candidate_success(mock_notify, app, client, admin_user, sample_c
     payload = _candidate_payload(sample_client.id, sample_jd.id, email="brandnew@example.com")
     resp = client.post("/api/candidates", json=payload, headers=headers)
     assert resp.status_code == 201
-    assert resp.get_json()["email"] == "brandnew@example.com"
+    data = resp.get_json()
+    candidate = data.get("candidate", data)
+    assert candidate["email"] == "brandnew@example.com"
 
 
 @patch("app.blueprints.candidates.send_resume_upload_notification_to_operator")
@@ -147,7 +149,9 @@ def test_update_candidate_status(app, client, admin_user, sample_candidate):
         headers=headers,
     )
     assert resp.status_code == 200
-    assert resp.get_json()["status"] == "SHORTLISTED"
+    data = resp.get_json()
+    candidate = data.get("candidate", data)
+    assert candidate["status"] == "SHORTLISTED"
 
 
 def test_update_candidate_not_found(app, client, admin_user):

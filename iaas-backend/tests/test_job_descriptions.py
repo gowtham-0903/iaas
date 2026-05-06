@@ -34,8 +34,9 @@ def test_create_jd_admin(app, client, admin_user, sample_client):
     )
     assert resp.status_code == 201
     data = resp.get_json()
-    assert data["title"] == "Backend Engineer"
-    assert data.get("status") == "DRAFT"
+    jd_data = data.get("jd", data)
+    assert jd_data["title"] == "Backend Engineer"
+    assert jd_data.get("status") == "DRAFT"
 
 
 def test_create_jd_assigns_job_code(app, client, admin_user, sample_client):
@@ -46,7 +47,9 @@ def test_create_jd_assigns_job_code(app, client, admin_user, sample_client):
         headers=headers,
     )
     assert resp.status_code == 201
-    job_code = resp.get_json().get("job_code", "")
+    data = resp.get_json()
+    jd_data = data.get("jd", data)
+    job_code = jd_data.get("job_code", "")
     assert JD_CODE_PATTERN.match(job_code), f"Unexpected job_code format: {job_code}"
 
 
@@ -97,7 +100,9 @@ def test_get_jd_by_id(app, client, admin_user, sample_jd):
     headers = auth_headers(app, admin_user)
     resp = client.get(f"/api/jds/{sample_jd.id}", headers=headers)
     assert resp.status_code == 200
-    assert resp.get_json()["title"] == "Senior Python Developer"
+    data = resp.get_json()
+    jd_data = data.get("jd", data)
+    assert jd_data["title"] == "Senior Python Developer"
 
 
 def test_get_jd_not_found(app, client, admin_user):
@@ -125,7 +130,9 @@ def test_update_jd_status_draft_to_active(app, client, admin_user, sample_client
     headers = auth_headers(app, admin_user)
     resp = client.put(f"/api/jds/{jd_id}/status", json={"status": "ACTIVE"}, headers=headers)
     assert resp.status_code == 200
-    assert resp.get_json()["status"] == "ACTIVE"
+    data = resp.get_json()
+    jd_data = data.get("jd", data)
+    assert jd_data["status"] == "ACTIVE"
 
 
 def test_update_jd_status_invalid(app, client, admin_user, sample_jd):
@@ -159,7 +166,9 @@ def test_add_skill_to_jd(app, client, admin_user, sample_jd):
         headers=headers,
     )
     assert resp.status_code == 201
-    assert resp.get_json()["skill_name"] == "Docker"
+    data = resp.get_json()
+    skill_data = data.get("skill", data)
+    assert skill_data["skill_name"] == "Docker"
 
 
 def test_add_skill_missing_name(app, client, admin_user, sample_jd):
@@ -181,7 +190,9 @@ def test_update_skill(app, client, admin_user, sample_jd, sample_jd_skills):
         headers=headers,
     )
     assert resp.status_code == 200
-    assert resp.get_json()["skill_name"] == "Python Advanced"
+    data = resp.get_json()
+    skill_data = data.get("skill", data)
+    assert skill_data["skill_name"] == "Python Advanced"
 
 
 def test_delete_skill(app, client, admin_user, sample_jd, sample_jd_skills):
@@ -195,7 +206,7 @@ def test_delete_skill(app, client, admin_user, sample_jd, sample_jd_skills):
 # AI extraction (mocked to avoid OpenAI calls)
 # ---------------------------------------------------------------------------
 
-@patch("app.blueprints.job_descriptions.OpenAI")
+@patch("app.services.skill_extractor.OpenAI")
 def test_extract_skills_calls_ai(mock_openai_cls, app, client, admin_user, sample_client):
     mock_client = mock_openai_cls.return_value
     mock_client.chat.completions.create.return_value.choices = [

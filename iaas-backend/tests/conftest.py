@@ -23,9 +23,15 @@ from app import create_app
 from app.extensions import db as _db
 from app.models.candidate import Candidate
 from app.models.client import Client
+from app.models.feedback_validation import FeedbackValidation
 from app.models.interview_schedule import InterviewSchedule, PanelAssignment
+from app.models.interview_scoring import AIInterviewScore, InterviewScore, InterviewTranscript
+from app.models.jd_panelist_assignment import JDPanelistAssignment
+from app.models.jd_recruiter_assignment import JDRecruiterAssignment
 from app.models.jd_skill import JDSkill
 from app.models.job_description import JobDescription
+from app.models.operator_client_assignment import OperatorClientAssignment
+from app.models.revoked_token import RevokedToken
 from app.models.user import User, UserRole
 
 
@@ -35,6 +41,7 @@ from app.models.user import User, UserRole
 
 class TestingConfig:
     TESTING = True
+    PROPAGATE_EXCEPTIONS = True
     # SQLite in-memory with StaticPool ensures all connections share the same DB
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
@@ -42,6 +49,7 @@ class TestingConfig:
         "connect_args": {"check_same_thread": False},
         "poolclass": StaticPool,
     }
+    SQLALCHEMY_EXPIRE_ON_COMMIT = False
     JWT_SECRET_KEY = "test-secret-key-pytest-only"
     # Use headers instead of cookies — simpler for test clients
     JWT_TOKEN_LOCATION = ["headers"]
@@ -317,4 +325,53 @@ def sample_interview(app, sample_candidate, sample_jd, panelist_user):
         )
         _db.session.add(assignment)
         _db.session.commit()
+        _db.session.refresh(interview)
+        return interview
+
+
+@pytest.fixture
+def sample_reviewable_interview(app, sample_candidate, sample_jd, panelist_user, admin_user):
+    """A COMPLETED interview with transcript and AI score — usable in QC tests."""
+    with app.app_context():
+        interview = InterviewSchedule(
+            candidate_id=sample_candidate.id,
+            jd_id=sample_jd.id,
+            scheduled_at=datetime(2026, 8, 1, 10, 0, 0),
+            duration_minutes=60,
+            mode="virtual",
+            timezone="Asia/Kolkata",
+            meeting_link="https://teams.microsoft.com/test",
+            status="COMPLETED",
+        )
+        _db.session.add(interview)
+        _db.session.commit()
+
+        assignment = PanelAssignment(interview_id=interview.id, panelist_id=panelist_user.id)
+        _db.session.add(assignment)
+        _db.session.commit()
+
+        transcript = InterviewTranscript(
+            interview_id=interview.id,
+            uploaded_by=admin_user.id,
+            raw_text="This is a sample transcript of the interview.",
+            upload_type="text",
+            uploaded_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        _db.session.add(transcript)
+        _db.session.commit()
+
+        ai_score = AIInterviewScore(
+            interview_id=interview.id,
+            transcript_id=transcript.id,
+            overall_score=7.5,
+            skill_scores=[],
+            strengths=["Strong Python skills"],
+            concerns=["Limited cloud experience"],
+            recommendation="HIRE",
+            report_status="GENERATED",
+            generated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        _db.session.add(ai_score)
+        _db.session.commit()
+        _db.session.refresh(interview)
         return interview

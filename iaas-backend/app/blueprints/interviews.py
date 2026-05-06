@@ -208,7 +208,7 @@ def _serialize_interview_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                 "candidate_email": row["candidate_email"],
                 "jd_id": row["jd_id"],
                 "jd_title": row["jd_title"],
-                "scheduled_at": row["scheduled_at"].isoformat() if row["scheduled_at"] else None,
+                "scheduled_at": row["scheduled_at"].isoformat() if hasattr(row["scheduled_at"], "isoformat") else row["scheduled_at"] if row["scheduled_at"] else None,
                 "scheduled_at_local": _convert_utc_to_local(row["scheduled_at"], row.get("timezone", "America/New_York")),
                 "duration_minutes": row["duration_minutes"],
                 "mode": row["mode"],
@@ -475,8 +475,8 @@ def create_interview():
 
         assignment_stmt = sa.text(
             """
-            INSERT INTO panel_assignments (interview_id, panelist_id, assigned_by, created_at)
-            VALUES (:interview_id, :panelist_id, :assigned_by, :created_at)
+            INSERT INTO panel_assignments (interview_id, panelist_id, created_at)
+            VALUES (:interview_id, :panelist_id, :created_at)
             """
         )
         for panelist_id in panelist_ids:
@@ -485,7 +485,6 @@ def create_interview():
                 {
                     "interview_id": interview_id,
                     "panelist_id": panelist_id,
-                    "assigned_by": user.id,
                     "created_at": created_at,
                 },
             )
@@ -720,12 +719,16 @@ def create_panelist_availability():
             LIMIT 1
             """
         )
+        start_str = start_time.strftime("%H:%M:%S")
+        end_str = end_time.strftime("%H:%M:%S")
+        date_str = available_date.isoformat()
+
         exists = db.session.execute(
             exists_stmt,
             {
                 "panelist_id": panelist_id,
-                "available_date": available_date,
-                "start_time": start_time,
+                "available_date": date_str,
+                "start_time": start_str,
             },
         ).first()
         if exists:
@@ -743,9 +746,9 @@ def create_panelist_availability():
             insert_stmt,
             {
                 "panelist_id": panelist_id,
-                "available_date": available_date,
-                "start_time": start_time,
-                "end_time": end_time,
+                "available_date": date_str,
+                "start_time": start_str,
+                "end_time": end_str,
                 "is_booked": 0,
                 "created_at": created_at,
             },

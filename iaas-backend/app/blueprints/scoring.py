@@ -9,6 +9,7 @@ import sqlalchemy as sa
 from werkzeug.utils import secure_filename
 
 from app.extensions import db
+from app.models.interview_scoring import InterviewScore
 from app.models.user import User, UserRole
 from app.services.ai_scorer import generate_interview_score
 from app.services.file_parser import extract_text_from_docx
@@ -103,7 +104,7 @@ def _group_scores(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "communication_score": row["communication_score"],
                 "problem_solving_score": row["problem_solving_score"],
                 "comments": row["comments"],
-                "submitted_at": row["submitted_at"].isoformat() if row["submitted_at"] else None,
+                "submitted_at": row["submitted_at"].isoformat() if hasattr(row["submitted_at"], "isoformat") else row["submitted_at"] if row["submitted_at"] else None,
             }
         )
     return list(grouped.values())
@@ -196,37 +197,27 @@ def submit_scores(interview_id: int):
 
     submitted_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    upsert_stmt = sa.text(
-        """
-        INSERT INTO interview_scores
-            (interview_id, panelist_id, skill_id, technical_score, communication_score,
-             problem_solving_score, comments, submitted_at)
-        VALUES
-            (:interview_id, :panelist_id, :skill_id, :technical_score, :communication_score,
-             :problem_solving_score, :comments, :submitted_at)
-        ON DUPLICATE KEY UPDATE
-            technical_score = VALUES(technical_score),
-            communication_score = VALUES(communication_score),
-            problem_solving_score = VALUES(problem_solving_score),
-            comments = VALUES(comments),
-            submitted_at = VALUES(submitted_at)
-        """
-    )
-
     for item in normalized_scores:
-        db.session.execute(
-            upsert_stmt,
-            {
-                "interview_id": interview_id,
-                "panelist_id": panelist_id,
-                "skill_id": item["skill_id"],
-                "technical_score": item["technical_score"],
-                "communication_score": item["communication_score"],
-                "problem_solving_score": item["problem_solving_score"],
-                "comments": item["comments"],
-                "submitted_at": submitted_at,
-            },
-        )
+        existing = db.session.query(InterviewScore).filter_by(
+            interview_id=interview_id, panelist_id=panelist_id, skill_id=item["skill_id"]
+        ).first()
+        if existing:
+            existing.technical_score = item["technical_score"]
+            existing.communication_score = item["communication_score"]
+            existing.problem_solving_score = item["problem_solving_score"]
+            existing.comments = item["comments"]
+            existing.submitted_at = submitted_at
+        else:
+            db.session.add(InterviewScore(
+                interview_id=interview_id,
+                panelist_id=panelist_id,
+                skill_id=item["skill_id"],
+                technical_score=item["technical_score"],
+                communication_score=item["communication_score"],
+                problem_solving_score=item["problem_solving_score"],
+                comments=item["comments"],
+                submitted_at=submitted_at,
+            ))
 
     db.session.commit()
 
@@ -426,7 +417,7 @@ def upload_transcript(interview_id: int):
         "file_url": transcript["file_url"],
         "raw_text": transcript["raw_text"],
         "upload_type": transcript["upload_type"],
-        "uploaded_at": transcript["uploaded_at"].isoformat() if transcript["uploaded_at"] else None,
+        "uploaded_at": transcript["uploaded_at"].isoformat() if hasattr(transcript["uploaded_at"], "isoformat") else transcript["uploaded_at"] if transcript["uploaded_at"] else None,
     }
 
     return jsonify({"transcript": transcript_payload, "ai_score": ai_result}), 200

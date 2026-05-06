@@ -65,7 +65,9 @@ def test_create_user_admin_success(app, client, admin_user, sample_client):
         headers=headers,
     )
     assert resp.status_code == 201
-    assert resp.get_json()["email"] == "new.recruiter@test.com"
+    data = resp.get_json()
+    user = data.get("user", data)
+    assert user["email"] == "new.recruiter@test.com"
 
 
 def test_create_user_duplicate_email(app, client, admin_user, recruiter_user, sample_client):
@@ -150,7 +152,9 @@ def test_update_user_full_name(app, client, admin_user, recruiter_user):
         headers=headers,
     )
     assert resp.status_code == 200
-    assert resp.get_json()["full_name"] == "Updated Name"
+    data = resp.get_json()
+    user = data.get("user", data)
+    assert user["full_name"] == "Updated Name"
 
 
 def test_update_nonexistent_user(app, client, admin_user):

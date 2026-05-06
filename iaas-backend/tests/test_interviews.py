@@ -50,7 +50,7 @@ def test_schedule_interview_success(
     app, client, admin_user, sample_candidate, sample_jd, panelist_user
 ):
     mock_teams.return_value = {
-        "meeting_link": "https://teams.microsoft.com/l/meetup-join/mock",
+        "join_url": "https://teams.microsoft.com/l/meetup-join/mock",
         "external_event_id": "event-123",
         "teams_meeting_id": "teams-456",
     }
@@ -75,7 +75,7 @@ def test_schedule_interview_panelist_role_forbidden(
     app, client, panelist_user, sample_candidate, sample_jd
 ):
     """PANELIST must not schedule interviews."""
-    mock_teams.return_value = {"meeting_link": "https://teams.test"}
+    mock_teams.return_value = {"join_url": "https://teams.test", "external_event_id": "ev1", "teams_meeting_id": "tm1"}
     headers = auth_headers(app, panelist_user)
     payload = _schedule_payload(sample_candidate.id, sample_jd.id, panelist_user.id)
     resp = client.post("/api/interviews", json=payload, headers=headers)
@@ -98,7 +98,7 @@ def test_schedule_interview_missing_candidate(
     mock_notify_panelist, mock_notify_candidate,
     app, client, admin_user, sample_jd, panelist_user
 ):
-    mock_teams.return_value = {"meeting_link": "https://teams.test"}
+    mock_teams.return_value = {"join_url": "https://teams.test", "external_event_id": "ev1", "teams_meeting_id": "tm1"}
     headers = auth_headers(app, admin_user)
     payload = {
         "candidate_id": 99999,
@@ -200,9 +200,7 @@ def test_create_panelist_availability(app, client, panelist_user):
     resp = client.post(
         "/api/interviews/panelist-availability",
         json={
-            "available_date": "2026-09-01",
-            "start_time": "09:00",
-            "end_time": "17:00",
+            "slots": [{"date": "2026-09-01", "start_time": "09:00", "end_time": "17:00"}]
         },
         headers=headers,
     )

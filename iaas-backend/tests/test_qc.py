@@ -43,12 +43,11 @@ def test_qc_dashboard_unauthenticated(client):
 # GET /api/qc/interviews/<id>/review
 # ---------------------------------------------------------------------------
 
-def test_qc_review_returns_interview_data(app, client, qc_user, sample_interview):
+def test_qc_review_returns_interview_data(app, client, qc_user, sample_reviewable_interview):
     headers = auth_headers(app, qc_user)
-    resp = client.get(f"/api/qc/interviews/{sample_interview.id}/review", headers=headers)
+    resp = client.get(f"/api/qc/interviews/{sample_reviewable_interview.id}/review", headers=headers)
     assert resp.status_code == 200
     data = resp.get_json()
-    # Must include interview or candidate data at minimum
     assert data is not None
 
 
@@ -58,9 +57,9 @@ def test_qc_review_not_found(app, client, qc_user):
     assert resp.status_code == 404
 
 
-def test_qc_review_recruiter_forbidden(app, client, recruiter_user, sample_interview):
+def test_qc_review_recruiter_forbidden(app, client, recruiter_user, sample_reviewable_interview):
     headers = auth_headers(app, recruiter_user)
-    resp = client.get(f"/api/qc/interviews/{sample_interview.id}/review", headers=headers)
+    resp = client.get(f"/api/qc/interviews/{sample_reviewable_interview.id}/review", headers=headers)
     assert resp.status_code == 403
 
 
@@ -68,12 +67,11 @@ def test_qc_review_recruiter_forbidden(app, client, recruiter_user, sample_inter
 # POST /api/qc/interviews/<id>/validate
 # ---------------------------------------------------------------------------
 
-def test_qc_validate_interview(app, client, qc_user, sample_interview):
+def test_qc_validate_interview(app, client, qc_user, sample_reviewable_interview):
     headers = auth_headers(app, qc_user)
-    resp = client.post(
-        f"/api/qc/interviews/{sample_interview.id}/validate",
+    resp = client.put(
+        f"/api/qc/interviews/{sample_reviewable_interview.id}/review",
         json={
-            "status": "VALIDATED",
             "final_recommendation": "HIRE",
             "qc_notes": "Strong candidate.",
             "approved": True,
@@ -83,40 +81,39 @@ def test_qc_validate_interview(app, client, qc_user, sample_interview):
     assert resp.status_code in (200, 201)
 
 
-def test_qc_validate_with_overrides(app, client, qc_user, sample_interview):
+def test_qc_validate_with_overrides(app, client, qc_user, sample_reviewable_interview):
     headers = auth_headers(app, qc_user)
-    resp = client.post(
-        f"/api/qc/interviews/{sample_interview.id}/validate",
+    resp = client.put(
+        f"/api/qc/interviews/{sample_reviewable_interview.id}/review",
         json={
-            "status": "VALIDATED",
             "final_recommendation": "MAYBE",
             "qc_notes": "Needs improvement in communication.",
             "approved": False,
-            "skill_overrides": {"Python": 6, "Communication": 5},
+            "skill_overrides": [],
         },
         headers=headers,
     )
     assert resp.status_code in (200, 201)
 
 
-def test_qc_validate_invalid_recommendation(app, client, qc_user, sample_interview):
+def test_qc_validate_invalid_recommendation(app, client, qc_user, sample_reviewable_interview):
     headers = auth_headers(app, qc_user)
-    resp = client.post(
-        f"/api/qc/interviews/{sample_interview.id}/validate",
+    resp = client.put(
+        f"/api/qc/interviews/{sample_reviewable_interview.id}/review",
         json={
-            "status": "VALIDATED",
             "final_recommendation": "EXCELLENT",  # invalid
+            "approved": True,
         },
         headers=headers,
     )
     assert resp.status_code == 400
 
 
-def test_qc_validate_non_qc_user_forbidden(app, client, recruiter_user, sample_interview):
+def test_qc_validate_non_qc_user_forbidden(app, client, recruiter_user, sample_reviewable_interview):
     headers = auth_headers(app, recruiter_user)
-    resp = client.post(
-        f"/api/qc/interviews/{sample_interview.id}/validate",
-        json={"status": "VALIDATED", "final_recommendation": "HIRE", "approved": True},
+    resp = client.put(
+        f"/api/qc/interviews/{sample_reviewable_interview.id}/review",
+        json={"final_recommendation": "HIRE", "approved": True},
         headers=headers,
     )
     assert resp.status_code == 403
@@ -128,5 +125,5 @@ def test_qc_validate_non_qc_user_forbidden(app, client, recruiter_user, sample_i
 
 def test_qc_reports_as_qc(app, client, qc_user):
     headers = auth_headers(app, qc_user)
-    resp = client.get("/api/qc/reports", headers=headers)
+    resp = client.get("/api/qc/interviews", headers=headers)
     assert resp.status_code == 200

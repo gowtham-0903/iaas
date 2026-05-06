@@ -22,7 +22,8 @@ def test_create_client_admin(app, client, admin_user):
     )
     assert resp.status_code == 201
     data = resp.get_json()
-    assert data["name"] == "New Corp"
+    client_data = data.get("client", data)
+    assert client_data["name"] == "New Corp"
 
 
 def test_create_client_non_admin_forbidden(app, client, m_recruiter_user):
@@ -79,7 +80,9 @@ def test_get_client_by_id(app, client, admin_user, sample_client):
     headers = auth_headers(app, admin_user)
     resp = client.get(f"/api/clients/{sample_client.id}", headers=headers)
     assert resp.status_code == 200
-    assert resp.get_json()["name"] == "Acme Corp"
+    data = resp.get_json()
+    client_data = data.get("client", data)
+    assert client_data["name"] == "Acme Corp"
 
 
 def test_get_client_not_found(app, client, admin_user):
@@ -100,7 +103,9 @@ def test_update_client_admin(app, client, admin_user, sample_client):
         headers=headers,
     )
     assert resp.status_code == 200
-    assert resp.get_json()["name"] == "Acme Corp Updated"
+    data = resp.get_json()
+    client_data = data.get("client", data)
+    assert client_data["name"] == "Acme Corp Updated"
 
 
 # ---------------------------------------------------------------------------
