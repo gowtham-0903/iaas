@@ -5,6 +5,10 @@ import { login } from '../api/authApi'
 import useAuthStore from '../store/authStore'
 import platformLogo from '../../logo/MEEDENLABS_LOGO_WITH_FONT_TradeMark_1.jpg'
 
+function getHomeRoute(role) {
+  return role === 'CLIENT' ? '/client-dashboard' : '/dashboard'
+}
+
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -16,7 +20,7 @@ export default function Login() {
   const setUser = useAuthStore((state) => state.setUser)
 
   useEffect(() => {
-    if (user) navigate('/dashboard', { replace: true })
+    if (user) navigate(getHomeRoute(user.role), { replace: true })
   }, [navigate, user])
 
   async function handleSubmit(event) {
@@ -30,7 +34,7 @@ export default function Login() {
       setError('')
       const response = await login(email, password)
       setUser(response.data.user)
-      navigate('/dashboard', { replace: true })
+      navigate(getHomeRoute(response.data.user?.role), { replace: true })
     } catch (loginError) {
       const message =
         loginError?.response?.data?.error ||

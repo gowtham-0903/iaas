@@ -10,6 +10,7 @@ import {
 import { getCandidates } from '../api/candidatesApi'
 import { getJDs } from '../api/jdApi'
 import AppShell from '../components/AppShell'
+import useAuthStore from '../store/authStore'
 import {
   AlertBanner, Avatar, Badge, Card, CardTitle, DangerBtn, DataTable,
   EmptyState, FormField, FormInput, FormSelect, LoadingState,
@@ -107,6 +108,8 @@ function enrichClientsWithMetrics(clients, jds, candidates) {
 
 export default function Clients() {
   const navigate = useNavigate()
+  const user = useAuthStore((state) => state.user)
+  const isAdmin = user?.role === 'ADMIN'
   const [clients, setClients] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -283,30 +286,32 @@ export default function Clients() {
   }
 
   return (
-    <AppShell pageTitle="Clients" pageSubtitle="Manage client accounts and their associated JDs">
+    <AppShell>
       {/* Topbar */}
       <div className="flex items-center justify-between mb-5">
         <div />
-        <PrimaryBtn
-          onClick={() => {
-            setShowCreateForm((previous) => !previous)
-            setEditingClient(null)
-            setDeletingClientId(null)
-            setError('')
-            setSuccess('')
-            setFormErrors({})
-            setFormData(DEFAULT_FORM)
-          }}
-        >
-          {showCreateForm ? 'Close' : '+ Add Client'}
-        </PrimaryBtn>
+        {isAdmin && (
+          <PrimaryBtn
+            onClick={() => {
+              setShowCreateForm((previous) => !previous)
+              setEditingClient(null)
+              setDeletingClientId(null)
+              setError('')
+              setSuccess('')
+              setFormErrors({})
+              setFormData(DEFAULT_FORM)
+            }}
+          >
+            {showCreateForm ? 'Close' : '+ Add Client'}
+          </PrimaryBtn>
+        )}
       </div>
 
       <AlertBanner type="error" message={error} />
       <AlertBanner type="success" message={success} />
 
       {/* Create form */}
-      {showCreateForm && (
+      {isAdmin && showCreateForm && (
         <Card>
           <CardTitle>Create Client</CardTitle>
           <ClientForm
@@ -323,7 +328,7 @@ export default function Clients() {
       )}
 
       {/* Edit form */}
-      {editingClient && (
+      {isAdmin && editingClient && (
         <Card>
           <CardTitle>Edit Client — {editingClient.name}</CardTitle>
           <ClientForm
@@ -340,7 +345,7 @@ export default function Clients() {
       )}
 
       {/* Delete confirmation */}
-      {deletingClientId && (
+      {isAdmin && deletingClientId && (
         <Card>
           <CardTitle>Delete Client</CardTitle>
           <p className="text-sm text-slate-600 mb-4">Deleting a client is blocked if it has linked JDs or candidates.</p>
@@ -384,24 +389,28 @@ export default function Clients() {
                 <TableCell><span className="font-semibold text-red-500">{client.metrics?.not_selected_count ?? 0}</span></TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={() => handleEditClick(client)}
-                      className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDeletingClientId(client.id)
-                        setShowCreateForm(false)
-                        setEditingClient(null)
-                      }}
-                      className="text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
-                    >
-                      Delete
-                    </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => handleEditClick(client)}
+                        className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                      >
+                        Edit
+                      </button>
+                    )}
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeletingClientId(client.id)
+                          setShowCreateForm(false)
+                          setEditingClient(null)
+                        }}
+                        className="text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                      >
+                        Delete
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => navigate('/jd')}

@@ -14,6 +14,8 @@ class JobDescription(db.Model):
     file_url = db.Column(db.String(500), nullable=True)
     calibration_url = db.Column(db.String(500), nullable=True)
     rate_scale = db.Column(db.String(255), nullable=True)
+    skills_extraction_hash = db.Column(db.String(64), nullable=True)
+    skills_extracted_at = db.Column(db.DateTime, nullable=True)
     status = db.Column(
         db.Enum("DRAFT", "ACTIVE", "CLOSED", name="jd_status_enum"),
         nullable=False,

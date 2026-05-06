@@ -57,6 +57,7 @@ temp/
 *.pid
 *.seed
 
-# Uploaded JD files
+# Uploaded files
 iaas-backend/uploads/jd_files/
+iaas-backend/uploads/resumes/
 /postman

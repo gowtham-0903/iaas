@@ -5,7 +5,7 @@ import platformLogo from '../../logo/MEEDENLABS_LOGO_WITH_FONT_TradeMark_1.jpg'
 import { logout as logoutRequest } from '../api/authApi'
 import useAuthStore from '../store/authStore'
 
-const navigationSections = [
+const defaultNavigationSections = [
   {
     heading: 'Main',
     items: [
@@ -37,15 +37,6 @@ const navigationSections = [
         ),
       },
       {
-        label: 'AI Skill Extraction',
-        to: '/skill-extraction',
-        icon: (
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-          </svg>
-        ),
-      },
-      {
         label: 'Candidates',
         to: '/candidates',
         icon: (
@@ -61,7 +52,7 @@ const navigationSections = [
     items: [
       {
         label: 'Schedule',
-        to: '/schedule',
+        to: '/interviews',
         icon: (
           <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -69,11 +60,11 @@ const navigationSections = [
         ),
       },
       {
-        label: 'Feedback',
-        to: '/feedback',
+        label: 'Panelist Assignments',
+        to: '/panelist-assignments',
         icon: (
           <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-1a4 4 0 00-5-3.87M17 20H7m10 0v-1c0-.9-.16-1.765-.456-2.565M7 20H2v-1a4 4 0 015-3.87M7 20v-1c0-.9.16-1.765.456-2.565m0 0a5 5 0 019.088 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
         ),
       },
@@ -92,6 +83,15 @@ const navigationSections = [
         ),
       },
       {
+        label: 'QC Review',
+        to: '/qc',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        ),
+      },
+      {
         label: 'Users',
         to: '/users',
         icon: (
@@ -104,24 +104,200 @@ const navigationSections = [
   },
 ]
 
-function isActiveRoute(pathname, to) {
-  return pathname === to || (to === '/dashboard' && pathname === '/')
+const clientNavigationSections = [
+  {
+    heading: 'Main',
+    items: [
+      {
+        label: 'Dashboard',
+        to: '/client-dashboard',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    heading: 'Results',
+    items: [
+      {
+        label: 'Results',
+        to: '/client-dashboard?tab=results',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 17v-6m4 6V7m4 10v-3M5 21h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z" />
+          </svg>
+        ),
+      },
+    ],
+  },
+]
+
+const panelistNavigationSections = [
+  {
+    heading: 'Main',
+    items: [
+      {
+        label: 'Dashboard',
+        to: '/dashboard',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+          </svg>
+        ),
+      },
+      {
+        label: 'Candidates',
+        to: '/candidates',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        ),
+      },
+      {
+        label: 'Job Descriptions',
+        to: '/jd',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    heading: 'Interviews',
+    items: [
+      {
+        label: 'Slots & Interviews',
+        to: '/slots',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    heading: 'Reports',
+    items: [
+      {
+        label: 'Score Reports',
+        to: '/report',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          </svg>
+        ),
+      },
+    ],
+  },
+]
+
+const operatorNavigationSections = [
+  {
+    heading: 'Main',
+    items: [
+      {
+        label: 'Dashboard',
+        to: '/dashboard',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+          </svg>
+        ),
+      },
+      {
+        label: 'Candidates',
+        to: '/candidates',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    heading: 'Scheduling',
+    items: [
+      {
+        label: 'Schedule Interviews',
+        to: '/interviews',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+        ),
+      },
+      {
+        label: 'Panelist Assignments',
+        to: '/panelist-assignments',
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-1a4 4 0 00-5-3.87M17 20H7m10 0v-1c0-.9-.16-1.765-.456-2.565M7 20H2v-1a4 4 0 015-3.87M7 20v-1c0-.9.16-1.765.456-2.565m0 0a5 5 0 019.088 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        ),
+      },
+    ],
+  },
+]
+
+function isActiveRoute(location, to) {
+  const currentTab = new URLSearchParams(location.search).get('tab')
+
+  if (to === '/client-dashboard') {
+    return location.pathname === '/client-dashboard' && currentTab !== 'results'
+  }
+
+  if (to === '/client-dashboard?tab=results') {
+    return location.pathname === '/client-dashboard' && currentTab === 'results'
+  }
+
+  return location.pathname === to || (to === '/dashboard' && location.pathname === '/')
 }
 
 export default function Sidebar({ logoSubtitle = 'Admin Panel' }) {
   const location = useLocation()
   const navigate = useNavigate()
   const user = useAuthStore((state) => state.user)
+  const isPanelist = user?.role === 'PANELIST'
   const logout = useAuthStore((state) => state.logout)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const navigationSections = user?.role === 'CLIENT' 
+    ? clientNavigationSections 
+    : user?.role === 'PANELIST'
+      ? panelistNavigationSections
+      : user?.role === 'OPERATOR'
+        ? operatorNavigationSections
+        : defaultNavigationSections
 
   function canViewItem(item) {
+    if (user?.role === 'CLIENT') {
+      return item.to === '/client-dashboard' || item.to === '/client-dashboard?tab=results'
+    }
+    if (user?.role === 'OPERATOR') {
+      return !['/qc', '/users'].includes(item.to)
+    }
+    if (item.to === '/qc') {
+      return ['QC', 'ADMIN'].includes(user?.role)
+    }
     if (item.to === '/users') {
       return [
         'ADMIN',
         'M_RECRUITER',
         'SR_RECRUITER',
       ].includes(user?.role)
+    }
+    if (item.to === '/clients') {
+      return user?.role === 'ADMIN'
+    }
+    if (item.to === '/panelist-assignments') {
+      return ['ADMIN', 'OPERATOR'].includes(user?.role)
     }
     return true
   }
@@ -187,7 +363,7 @@ export default function Sidebar({ logoSubtitle = 'Admin Panel' }) {
               </div>
               <div className="space-y-0.5">
                 {section.items.filter(canViewItem).map((item) => {
-                  const active = isActiveRoute(location.pathname, item.to)
+                  const active = isActiveRoute(location, item.to)
                   return (
                     <Link
                       key={item.label}

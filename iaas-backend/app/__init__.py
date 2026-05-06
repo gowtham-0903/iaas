@@ -4,7 +4,20 @@ from flask_cors import CORS
 from app.blueprints import register_blueprints
 from app.config import Config
 from app.extensions import db, jwt, limiter, migrate
-from app.models import Candidate, Client, JDSkill, JobDescription, RevokedToken, User  # noqa: F401
+from app.models import (  # noqa: F401
+    AIInterviewScore,
+    Candidate,
+    Client,
+    InterviewSchedule,
+    InterviewScore,
+    InterviewTranscript,
+    JDSkill,
+    JobDescription,
+    PanelAssignment,
+    PanelistAvailability,
+    RevokedToken,
+    User,
+)
 
 
 def create_app(config_class=Config):

@@ -17,6 +17,7 @@ class UserRole(str, Enum):
     PANELIST = "PANELIST"
     QC = "QC"
     CLIENT = "CLIENT"
+    OPERATOR = "OPERATOR"
 
 
 class User(db.Model):

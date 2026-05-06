@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import AppShell from '../components/AppShell'
+import { getInterviews } from '../api/interviewsApi'
+import { getQCDashboard } from '../api/qcApi'
 import { getUsers } from '../api/usersApi'
+import useAuthStore from '../store/authStore'
 
 const BRAND = '#02c0fa'
 
@@ -95,51 +98,96 @@ const QUICK_ACTIONS = [
       </svg>
     ),
   },
-  {
-    label: 'AI Extraction',
-    to: '/skill-extraction',
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-      </svg>
-    ),
-  },
 ]
 
 export default function Dashboard() {
   const [users, setUsers] = useState([])
   const [isLoading, setIsLoading] = useState(true)
+  const [weekStats, setWeekStats] = useState({ interviewsThisWeek: '—', pendingQcReview: '—' })
   const navigate = useNavigate()
+  const currentUserRole = useAuthStore((state) => state.user?.role)
+  const isPanelist = currentUserRole === 'PANELIST'
+  const showInterviewStats = ['ADMIN', 'RECRUITER', 'SR_RECRUITER', 'M_RECRUITER', 'PANELIST'].includes(currentUserRole)
 
   useEffect(() => {
     let alive = true
-    getUsers()
-      .then((res) => {
+
+    async function loadData() {
+      try {
+        const now = new Date()
+        const dayOfWeek = now.getDay()
+        const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
+        const startOfWeek = new Date(now)
+        startOfWeek.setDate(now.getDate() + diffToMonday)
+        startOfWeek.setHours(0, 0, 0, 0)
+
+        const endOfWeek = new Date(startOfWeek)
+        endOfWeek.setDate(startOfWeek.getDate() + 6)
+        endOfWeek.setHours(23, 59, 59, 999)
+
+        const requests = [getUsers()]
+        if (showInterviewStats) {
+          requests.push(getInterviews({
+            date_from: startOfWeek.toISOString().slice(0, 10),
+            date_to: endOfWeek.toISOString().slice(0, 10),
+          }))
+          if (!isPanelist) {
+            requests.push(getQCDashboard())
+          }
+        }
+
+        const [usersResponse, interviewsResponse, qcResponse] = await Promise.all(requests)
+
         if (!alive) return
-        const data = res.data
+
+        const data = usersResponse.data
         setUsers(Array.isArray(data) ? data : data?.users ?? [])
-      })
-      .catch(() => {
-        if (alive) setUsers([])
-      })
-      .finally(() => {
+
+        if (showInterviewStats) {
+          setWeekStats({
+            interviewsThisWeek: interviewsResponse?.data?.interviews?.length ?? 0,
+            pendingQcReview: qcResponse?.data?.pending_reviews ?? 0,
+          })
+        }
+      } catch (_error) {
+        if (!alive) return
+        setUsers([])
+        if (showInterviewStats) {
+          setWeekStats({ interviewsThisWeek: '—', pendingQcReview: '—' })
+        }
+      } finally {
         if (alive) setIsLoading(false)
-      })
+      }
+    }
+
+    loadData()
     return () => { alive = false }
-  }, [])
+  }, [showInterviewStats])
 
   return (
-    <AppShell pageTitle="Overview" pageSubtitle="Get a quick snapshot of key metrics, candidate data, and pipeline trends">
+    <AppShell>
       {/* ─── Row 1: Stat Cards ─────────────────────────── */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
-        <StatCard label="Active JDs" value="12" delta="+2" sub="2 added this week" />
-        <StatCard label="Total Candidates" value="48" delta="+6.3%" sub="Increased by +7 this week" />
-        <StatCard label="Interviews" value="9" sub="3 scheduled this week" />
-        <StatCard label="Pending QC" value="5" delta="-2" deltaType="down" sub="Needs review before closing" />
-      </div>
+      {!isPanelist && (
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
+          <StatCard label="Active JDs" value="12" delta="+2" sub="2 added this week" />
+          <StatCard label="Total Candidates" value="48" delta="+6.3%" sub="Increased by +7 this week" />
+          <StatCard label="Interviews" value="9" sub="3 scheduled this week" />
+          <StatCard label="Pending QC" value="5" delta="-2" deltaType="down" sub="Needs review before closing" />
+        </div>
+      )}
+
+      {showInterviewStats ? (
+        <div className={`grid grid-cols-1 ${isPanelist ? 'md:grid-cols-1' : 'md:grid-cols-2'} gap-4 mb-5`}>
+          <StatCard label="Interviews This Week" value={weekStats.interviewsThisWeek} sub={isPanelist ? "Your assigned interviews this week" : "Scheduled during the current week"} />
+          {!isPanelist && (
+            <StatCard label="Pending QC Review" value={weekStats.pendingQcReview} sub="Completed interviews awaiting QC validation" />
+          )}
+        </div>
+      ) : null}
 
       {/* ─── Row 2: Pipeline + Quick Actions ──────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
+      {!isPanelist && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
         {/* Pipeline — 2/3 width */}
         <div className="lg:col-span-2 bg-white rounded-2xl p-5 shadow-[0_1px_4px_rgba(0,0,0,0.06)]">
           <div className="flex items-center justify-between mb-5">
@@ -192,6 +240,7 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+      )}
 
       {/* ─── Row 3: Team Members table ─────────────────── */}
       <div className="bg-white rounded-2xl shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">

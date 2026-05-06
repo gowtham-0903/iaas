@@ -4,10 +4,11 @@ import { Navigate, Outlet } from 'react-router-dom'
 import { getCurrentUser, refreshSession } from '../api/authApi'
 import useAuthStore from '../store/authStore'
 
-export default function ProtectedRoute({ children }) {
+export default function ProtectedRoute({ children, allowedRoles = [] }) {
   const user = useAuthStore((state) => state.user)
   const setUser = useAuthStore((state) => state.setUser)
   const logout = useAuthStore((state) => state.logout)
+  const hasRoleAccess = useAuthStore((state) => state.hasRoleAccess)
   const [isChecking, setIsChecking] = useState(true)
   const [isAuthenticated, setIsAuthenticated] = useState(Boolean(user))
 
@@ -63,6 +64,10 @@ export default function ProtectedRoute({ children }) {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
+  }
+
+  if (Array.isArray(allowedRoles) && allowedRoles.length > 0 && !hasRoleAccess(allowedRoles)) {
+    return <Navigate to="/dashboard" replace />
   }
 
   return children ?? <Outlet />

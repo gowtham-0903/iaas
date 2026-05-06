@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { getClients } from '../api/clientsApi'
 import { createUser, deleteUser, getUsers, getUsersByClient, updateUser } from '../api/usersApi'
@@ -6,14 +6,16 @@ import AppShell from '../components/AppShell'
 import {
   AlertBanner, Avatar, Badge, Card, CardTitle, DangerBtn, DataTable,
   EmptyState, FormField, FormInput, FormSelect, LoadingState,
-  PrimaryBtn, SecondaryBtn, TableCell, TableRow,
+  PrimaryBtn, SearchSelect, SecondaryBtn, TableCell, TableRow,
 } from '../components/ui'
 import useAuthStore from '../store/authStore'
 
 const ROLES = [
+  'OPERATOR',
   'M_RECRUITER',
   'SR_RECRUITER',
   'RECRUITER',
+  'PANELIST',
 ]
 
 const ROLE_VARIANTS = {
@@ -24,6 +26,7 @@ const ROLE_VARIANTS = {
   PANELIST: 'amber',
   QC: 'amber',
   CLIENT: 'green',
+  OPERATOR: 'gray',
 }
 
 const DEFAULT_FORM = {
@@ -32,6 +35,7 @@ const DEFAULT_FORM = {
   password: '',
   role: 'RECRUITER',
   client_id: '',
+  client_ids: [],
   reports_to: '',
   is_active: true,
 }
@@ -79,6 +83,7 @@ export default function Users() {
   const [users, setUsers] = useState([])
   const [clients, setClients] = useState([])
   const [managersForClient, setManagersForClient] = useState([])
+  const [searchQuery, setSearchQuery] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -100,6 +105,10 @@ export default function Users() {
 
   function isRecruiterRole(role) {
     return role === 'M_RECRUITER' || role === 'SR_RECRUITER' || role === 'RECRUITER'
+  }
+
+  function isOperatorRole(role) {
+    return role === 'OPERATOR'
   }
 
   function shouldLoadManagers(role) {
@@ -235,6 +244,7 @@ export default function Users() {
         ...previous,
         role: value,
         client_id: nextClientId,
+        client_ids: [],
         reports_to: '',
       }))
       setManagersForClient([])
@@ -247,6 +257,7 @@ export default function Users() {
         ...previous,
         role: null,
         client_id: null,
+        client_ids: null,
         reports_to: null,
       }))
       return
@@ -282,8 +293,24 @@ export default function Users() {
     }
   }
 
+  function handleClientIdToggle(clientId) {
+    setFormData((previous) => {
+      const current = previous.client_ids || []
+      const next = current.includes(clientId)
+        ? current.filter((id) => id !== clientId)
+        : [...current, clientId]
+      return { ...previous, client_ids: next }
+    })
+    setFormErrors((previous) => ({ ...previous, client_ids: null }))
+  }
+
   async function handleCreateUser(event) {
     event.preventDefault()
+
+    if (shouldLoadManagers(formData.role) && !formData.reports_to) {
+      setFormErrors({ reports_to: ['Reporting manager is required for this role'] })
+      return
+    }
 
     try {
       setIsSubmitting(true)
@@ -300,7 +327,8 @@ export default function Users() {
         email: formData.email,
         password: formData.password,
         role: formData.role,
-        client_id: effectiveClientId,
+        client_id: isOperatorRole(formData.role) ? null : effectiveClientId,
+        client_ids: isOperatorRole(formData.role) ? formData.client_ids : undefined,
         reports_to: formData.reports_to ? Number(formData.reports_to) : null,
         is_active: formData.is_active,
       }
@@ -343,6 +371,7 @@ export default function Users() {
       email: user.email,
       role: user.role,
       client_id: user.client_id ? String(user.client_id) : (creatorFixedClientId ? String(creatorFixedClientId) : ''),
+      client_ids: user.client_ids || [],
       reports_to: user.reports_to ? String(user.reports_to) : '',
       is_active: user.is_active,
     })
@@ -360,6 +389,11 @@ export default function Users() {
 
     if (!editingUser) return
 
+    if (shouldLoadManagers(formData.role) && !formData.reports_to) {
+      setFormErrors({ reports_to: ['Reporting manager is required for this role'] })
+      return
+    }
+
     try {
       setIsSubmitting(true)
       setError('')
@@ -370,9 +404,12 @@ export default function Users() {
         full_name: formData.full_name,
         email: formData.email,
         role: formData.role,
-        client_id: (
-          creatorFixedClientId && isRecruiterRole(formData.role)
-        ) ? Number(creatorFixedClientId) : (formData.client_id ? Number(formData.client_id) : null),
+        client_id: isOperatorRole(formData.role) ? null : (
+          (creatorFixedClientId && isRecruiterRole(formData.role))
+            ? Number(creatorFixedClientId)
+            : (formData.client_id ? Number(formData.client_id) : null)
+        ),
+        client_ids: isOperatorRole(formData.role) ? formData.client_ids : undefined,
         reports_to: formData.reports_to ? Number(formData.reports_to) : null,
         is_active: formData.is_active,
       }
@@ -525,6 +562,11 @@ export default function Users() {
     return client?.name || `Client #${clientId}`
   }
 
+  function getClientNamesForOperator(clientIds) {
+    if (!clientIds || clientIds.length === 0) return '—'
+    return clientIds.map((id) => getClientName(id)).join(', ')
+  }
+
   function getManagerName(managerId) {
     if (!managerId) return '—'
     if (currentUser?.id === managerId) {
@@ -534,8 +576,19 @@ export default function Users() {
     return manager?.full_name || `User #${managerId}`
   }
 
+  const filteredUsers = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase()
+    if (!query) return users
+    return users.filter((u) =>
+      u.full_name.toLowerCase().includes(query) ||
+      u.email.toLowerCase().includes(query) ||
+      u.role.toLowerCase().includes(query) ||
+      getClientName(u.client_id).toLowerCase().includes(query)
+    )
+  }, [users, searchQuery, clients])
+
   return (
-    <AppShell pageTitle="Users" pageSubtitle="Manage platform users and their access roles">
+    <AppShell>
       {!canViewUsersPage && (
         <Card>
           <CardTitle>Restricted Access</CardTitle>
@@ -545,8 +598,31 @@ export default function Users() {
 
       {canViewUsersPage && (
         <>
-      <div className="flex items-center justify-between mb-5">
-        <div />
+      <div className="flex items-center gap-3 mb-5">
+        <div className="relative flex-1 max-w-sm">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+          </svg>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search by name, email, role or client..."
+            className="w-full pl-9 pr-3.5 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition-all bg-white"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              aria-label="Clear search"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
         <PrimaryBtn
           onClick={() => {
             const nextShowCreateForm = !showCreateForm
@@ -592,30 +668,59 @@ export default function Users() {
                 <FormInput id="password" name="password" type="password" value={formData.password} onChange={handleChange} required placeholder="Min 8 chars, upper, lower, number, special" />
               </FormField>
               <FormField label="Role" htmlFor="role" error={getErrorText('role')}>
-                <FormSelect id="role" name="role" value={formData.role} onChange={handleChange} required>
-                  {getCreateRoleOptions().map((role) => (<option key={role} value={role}>{role}</option>))}
-                </FormSelect>
+                <SearchSelect
+                  inputId="role"
+                  options={getCreateRoleOptions().map((r) => ({ label: r, value: r }))}
+                  value={formData.role}
+                  onChange={(val) => handleChange({ target: { name: 'role', value: val || '' } })}
+                  placeholder="Select role"
+                />
               </FormField>
             </div>
             {isRecruiterRole(formData.role) && !creatorFixedClientId && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField label="Client" htmlFor="client_id" error={getErrorText('client_id')}>
-                  <FormSelect id="client_id" name="client_id" value={formData.client_id} onChange={handleChange} required>
-                    <option value="">Select Client</option>
-                    {clients.map((client) => (<option key={client.id} value={client.id}>{client.name}</option>))}
-                  </FormSelect>
+                  <SearchSelect
+                    inputId="client_id"
+                    options={clients.map((c) => ({ label: c.name, value: String(c.id) }))}
+                    value={formData.client_id}
+                    onChange={(val) => handleChange({ target: { name: 'client_id', value: val || '' } })}
+                    placeholder="Select Client"
+                  />
                 </FormField>
               </div>
             )}
-            {shouldLoadManagers(formData.role) && managersForClient.length > 0 && (
+            {isOperatorRole(formData.role) && (
+              <FormField label="Assign Clients" htmlFor="client_ids" error={getErrorText('client_ids')}>
+                <SearchSelect
+                  inputId="client_ids"
+                  options={clients.map((c) => ({ label: c.name, value: c.id }))}
+                  value={formData.client_ids}
+                  onChange={(vals) => setFormData((previous) => ({ ...previous, client_ids: vals }))}
+                  isMulti
+                  placeholder="Search and select clients..."
+                />
+                {formData.client_ids.length === 0 && (
+                  <p className="text-xs text-amber-600 mt-1">Select at least one client for this operator.</p>
+                )}
+              </FormField>
+            )}
+            {shouldLoadManagers(formData.role) && formData.client_id && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField label="Reports To (Optional)" htmlFor="reports_to" error={getErrorText('reports_to')}>
-                  <FormSelect id="reports_to" name="reports_to" value={formData.reports_to} onChange={handleChange}>
-                    <option value="">No manager assigned</option>
-                    {managersForClient.map((manager) => (
-                      <option key={manager.id} value={manager.id}>{manager.full_name} ({manager.role})</option>
-                    ))}
-                  </FormSelect>
+                <FormField label="Reports To" htmlFor="reports_to" error={getErrorText('reports_to')}>
+                  {managersForClient.length > 0 ? (
+                    <SearchSelect
+                      inputId="reports_to"
+                      options={managersForClient.map((m) => ({ label: `${m.full_name} (${m.role})`, value: String(m.id) }))}
+                      value={formData.reports_to}
+                      onChange={(val) => handleChange({ target: { name: 'reports_to', value: val || '' } })}
+                      placeholder="Select reporting manager"
+                    />
+                  ) : (
+                    <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      No eligible managers found for this client. Create an M_RECRUITER or SR_RECRUITER first.
+                    </div>
+                  )}
                 </FormField>
               </div>
             )}
@@ -646,36 +751,59 @@ export default function Users() {
               </FormField>
             </div>
             <FormField label="Role" htmlFor="edit_role" error={getErrorText('role')}>
-              <FormSelect id="edit_role" name="role" value={formData.role} onChange={handleChange} required>
-                {getEditRoleOptions().map((role) => (<option key={role} value={role}>{role}</option>))}
-              </FormSelect>
+              <SearchSelect
+                inputId="edit_role"
+                options={getEditRoleOptions().map((r) => ({ label: r, value: r }))}
+                value={formData.role}
+                onChange={(val) => handleChange({ target: { name: 'role', value: val || '' } })}
+                placeholder="Select role"
+              />
             </FormField>
             {isRecruiterRole(formData.role) && shouldShowClientDetails && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField label="Client" htmlFor="edit_client_id" error={getErrorText('client_id')}>
-                  <FormSelect
-                    id="edit_client_id"
-                    name="client_id"
+                  <SearchSelect
+                    inputId="edit_client_id"
+                    options={clients.map((c) => ({ label: c.name, value: String(c.id) }))}
                     value={formData.client_id}
-                    onChange={handleChange}
-                    required
-                    disabled={!canEditClientOnUpdate}
-                  >
-                    <option value="">Select Client</option>
-                    {clients.map((client) => (<option key={client.id} value={client.id}>{client.name}</option>))}
-                  </FormSelect>
+                    onChange={(val) => handleChange({ target: { name: 'client_id', value: val || '' } })}
+                    placeholder="Select Client"
+                    isDisabled={!canEditClientOnUpdate}
+                  />
                 </FormField>
               </div>
             )}
-            {shouldLoadManagers(formData.role) && managersForClient.length > 0 && (
+            {isOperatorRole(formData.role) && shouldShowClientDetails && (
+              <FormField label="Assign Clients" htmlFor="edit_client_ids" error={getErrorText('client_ids')}>
+                <SearchSelect
+                  inputId="edit_client_ids"
+                  options={clients.map((c) => ({ label: c.name, value: c.id }))}
+                  value={formData.client_ids || []}
+                  onChange={(vals) => setFormData((previous) => ({ ...previous, client_ids: vals }))}
+                  isMulti
+                  placeholder="Search and select clients..."
+                />
+                {(formData.client_ids || []).length === 0 && (
+                  <p className="text-xs text-amber-600 mt-1">Select at least one client for this operator.</p>
+                )}
+              </FormField>
+            )}
+            {shouldLoadManagers(formData.role) && formData.client_id && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField label="Reports To (Optional)" htmlFor="edit_reports_to" error={getErrorText('reports_to')}>
-                  <FormSelect id="edit_reports_to" name="reports_to" value={formData.reports_to} onChange={handleChange}>
-                    <option value="">No manager assigned</option>
-                    {managersForClient.map((manager) => (
-                      <option key={manager.id} value={manager.id}>{manager.full_name} ({manager.role})</option>
-                    ))}
-                  </FormSelect>
+                <FormField label="Reports To" htmlFor="edit_reports_to" error={getErrorText('reports_to')}>
+                  {managersForClient.length > 0 ? (
+                    <SearchSelect
+                      inputId="edit_reports_to"
+                      options={managersForClient.map((m) => ({ label: `${m.full_name} (${m.role})`, value: String(m.id) }))}
+                      value={formData.reports_to}
+                      onChange={(val) => handleChange({ target: { name: 'reports_to', value: val || '' } })}
+                      placeholder="Select reporting manager"
+                    />
+                  ) : (
+                    <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      No eligible managers found for this client. Create an M_RECRUITER or SR_RECRUITER first.
+                    </div>
+                  )}
                 </FormField>
               </div>
             )}
@@ -744,10 +872,10 @@ export default function Users() {
           tableClassName="text-xs sm:text-sm"
           wrapperClassName="rounded-2xl border border-slate-100"
         >
-          {users.length === 0 && !isLoading ? (
-            <tr><td colSpan={shouldShowClientDetails ? 8 : 7}><EmptyState message="No users found" /></td></tr>
+          {filteredUsers.length === 0 && !isLoading ? (
+            <tr><td colSpan={shouldShowClientDetails ? 8 : 7}><EmptyState message={searchQuery ? `No users match "${searchQuery}"` : 'No users found'} /></td></tr>
           ) : (
-            users.map((user) => (
+            filteredUsers.map((user) => (
               <TableRow key={user.id}>
                 <TableCell className="whitespace-nowrap">
                   <div className="flex items-start gap-2.5 min-w-0 max-w-[240px]">
@@ -760,7 +888,11 @@ export default function Users() {
                   <Badge variant={ROLE_VARIANTS[user.role] || 'gray'}>{user.role}</Badge>
                 </TableCell>
                 {shouldShowClientDetails && (
-                  <TableCell className="text-slate-500 whitespace-normal break-words">{getClientName(user.client_id)}</TableCell>
+                  <TableCell className="text-slate-500 whitespace-normal break-words">
+                    {user.role === 'OPERATOR'
+                      ? getClientNamesForOperator(user.client_ids)
+                      : getClientName(user.client_id)}
+                  </TableCell>
                 )}
                 <TableCell className="text-slate-500 whitespace-normal break-words">{getManagerName(user.reports_to)}</TableCell>
                 <TableCell>

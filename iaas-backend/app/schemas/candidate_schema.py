@@ -10,7 +10,14 @@ class CandidateSchema(BaseSchema):
     jd_id = fields.Int(required=True)
     full_name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     email = fields.Email(required=True, validate=validate.Length(max=255))
+    phone = fields.Str(load_default=None, allow_none=True, validate=validate.Length(max=50))
+    candidate_extracted_skills = fields.List(fields.Str(), load_default=None, allow_none=True)
     status = fields.Str(validate=validate.OneOf(CANDIDATE_STATUSES), load_default="APPLIED")
+    status_updated_at = fields.DateTime(dump_only=True)
+    resume_url = fields.Str(dump_only=True)
+    resume_filename = fields.Str(dump_only=True)
+    resume_uploaded_at = fields.DateTime(dump_only=True)
+    ai_extracted = fields.Bool(dump_only=True)
     created_at = fields.DateTime(dump_only=True)
 
 
@@ -18,6 +25,7 @@ class CandidateUpdateSchema(BaseSchema):
     jd_id = fields.Int()
     full_name = fields.Str(validate=validate.Length(min=1, max=255))
     email = fields.Email(validate=validate.Length(max=255))
+    phone = fields.Str(allow_none=True, validate=validate.Length(max=50))
     status = fields.Str(validate=validate.OneOf(CANDIDATE_STATUSES))
 
 

@@ -1,6 +1,7 @@
 import os
 import time
-from datetime import datetime
+import hashlib
+from datetime import datetime, timezone
 from typing import Optional
 
 from flask import Blueprint, jsonify, request, send_file
@@ -37,6 +38,7 @@ ALLOWED_RECRUITER_AND_ABOVE = {
     UserRole.M_RECRUITER.value,
     UserRole.QC.value,
     UserRole.ADMIN.value,
+    UserRole.PANELIST.value,
 }
 
 # JD creation requires SR_RECRUITER or above (RECRUITER is view-only per ROLES_AND_ACCESS.md)
@@ -52,7 +54,7 @@ def _get_current_user() -> Optional[User]:
     user_id = get_jwt_identity()
     if user_id is None:
         return None
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 
 
 def _get_upload_paths(jd_id, original_filename):
@@ -91,7 +93,7 @@ def _get_accessible_jd(jd_id):
     if current_user is None:
         return None, (jsonify({"message": "User not found"}), 404)
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return None, (jsonify({"error": "JD not found"}), 404)
 
@@ -122,9 +124,13 @@ def create_jd():
         return jsonify({"message": "User not found"}), 404
 
     client_id = validated_data["client_id"]
-    client = Client.query.get(client_id)
+    client = db.session.get(Client, client_id)
     if client is None:
         return jsonify({"error": "Client not found"}), 404
+
+    # Non-admin roles can only create JDs for their own client
+    if role != UserRole.ADMIN.value and current_user.client_id != client_id:
+        return jsonify({"error": "You can only create JDs for your own client"}), 403
 
     jd = JobDescription(
         client_id=client_id,
@@ -138,6 +144,19 @@ def create_jd():
 
     jd.job_code = f"JD-{datetime.now().year}-{str(jd.id).zfill(4)}"
     db.session.commit()
+
+    # Auto-assign RECRUITER who created the JD so they can see it and upload resumes for it
+    if role == UserRole.RECRUITER.value:
+        try:
+            assignment = JDRecruiterAssignment(
+                jd_id=jd.id,
+                recruiter_id=current_user.id,
+                assigned_by=current_user.id,
+            )
+            db.session.add(assignment)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
 
     return jsonify({"jd": jd_schema.dump(jd)}), 201
 
@@ -185,7 +204,7 @@ def get_jd(jd_id):
     if current_user is None:
         return jsonify({"message": "User not found"}), 404
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
@@ -212,7 +231,7 @@ def update_jd_status(jd_id):
     if current_user is None:
         return jsonify({"message": "User not found"}), 404
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
@@ -244,7 +263,7 @@ def close_jd(jd_id):
     if role != UserRole.ADMIN.value:
         return jsonify({"message": "Forbidden"}), 403
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
@@ -265,7 +284,7 @@ def upload_jd_file(jd_id):
     if current_user is None:
         return jsonify({"message": "User not found"}), 404
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
@@ -341,7 +360,7 @@ def extract_jd_skills(jd_id):
     if current_user is None:
         return jsonify({"message": "User not found"}), 404
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 
@@ -353,6 +372,27 @@ def extract_jd_skills(jd_id):
 
     if not jd.raw_text or not jd.raw_text.strip():
         return jsonify({"error": "No text to extract from"}), 400
+
+    source_hash = hashlib.sha256(jd.raw_text.encode()).hexdigest()[:16]
+    existing_skills = JDSkill.query.filter_by(jd_id=jd.id).order_by(JDSkill.id.asc()).all()
+    if jd.skills_extraction_hash == source_hash and existing_skills:
+        return jsonify(
+            {
+                "skills": [
+                    {
+                        "id": skill.id,
+                        "jd_id": skill.jd_id,
+                        "skill_name": skill.skill_name,
+                        "skill_type": skill.skill_type,
+                        "importance_level": skill.importance_level,
+                        "subtopics": skill.subtopics,
+                    }
+                    for skill in existing_skills
+                ],
+                "cached": True,
+                "extracted_at": jd.skills_extracted_at.isoformat() if jd.skills_extracted_at else None,
+            }
+        ), 200
 
     try:
         extracted = extract_skills_from_text(jd.raw_text)
@@ -399,6 +439,8 @@ def extract_jd_skills(jd_id):
         db.session.add(skill)
         saved_skills.append(skill)
 
+    jd.skills_extraction_hash = source_hash
+    jd.skills_extracted_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.session.commit()
 
     response_skills = [
@@ -552,7 +594,7 @@ def assign_recruiters():
     if not isinstance(recruiter_ids, list) or not recruiter_ids:
         return jsonify({"errors": {"recruiter_ids": ["recruiter_ids must be a non-empty list"]}}), 400
 
-    jd = JobDescription.query.get(jd_id)
+    jd = db.session.get(JobDescription, jd_id)
     if jd is None:
         return jsonify({"error": "JD not found"}), 404
 

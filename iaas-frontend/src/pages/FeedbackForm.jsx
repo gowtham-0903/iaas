@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import AppShell from '../components/AppShell'
 import { Card, CardTitle } from '../components/ui'
+import useAuthStore from '../store/authStore'
 
 const initialScores = {
   react: 4,
@@ -41,9 +43,17 @@ function ScoreSlider({ label, value, onChange }) {
 }
 
 export default function FeedbackForm() {
+  const navigate = useNavigate()
+  const userRole = useAuthStore((state) => state.user?.role)
   const [scores, setScores] = useState(initialScores)
   const [recommendation, setRecommendation] = useState('Strong Hire')
   const [comments, setComments] = useState('')
+
+  useEffect(() => {
+    if (userRole === 'PANELIST') {
+      navigate('/slots', { replace: true })
+    }
+  }, [navigate, userRole])
 
   function updateScore(key, value) {
     setScores((current) => ({ ...current, [key]: Number(value) }))
@@ -53,7 +63,7 @@ export default function FeedbackForm() {
   const avgSecondary = ((scores.docker + scores.aws) / 2).toFixed(1)
 
   return (
-    <AppShell logoSubtitle="Panelist view" pageTitle="Interview Feedback" pageSubtitle="Arjun Rajan · Sr. React Dev">
+    <AppShell logoSubtitle="Panelist view">
       <div className="max-w-2xl mx-auto space-y-4">
         {/* Score summary */}
         <div className="grid grid-cols-3 gap-4 mb-2">

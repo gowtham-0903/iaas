@@ -29,6 +29,13 @@ class Candidate(db.Model):
         nullable=False,
         default="APPLIED",
     )
+    status_updated_at = db.Column(db.DateTime, nullable=True)
+    candidate_extracted_skills = db.Column(db.JSON, nullable=True)
+    resume_url = db.Column(db.String(500), nullable=True)
+    resume_filename = db.Column(db.String(255), nullable=True)
+    resume_uploaded_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    phone = db.Column(db.String(50), nullable=True)
+    ai_extracted = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     client = db.relationship("Client", back_populates="candidates", lazy=True)
@@ -36,4 +43,3 @@ class Candidate(db.Model):
 
     def __repr__(self) -> str:
         return f"<Candidate {self.full_name}>"
-
