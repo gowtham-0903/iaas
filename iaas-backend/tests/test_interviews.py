@@ -204,6 +204,8 @@ def test_create_panelist_availability(app, client, panelist_user):
         },
         headers=headers,
     )
+    if resp.status_code not in (200, 201):
+        print(f"Response body: {resp.get_json()}")
     assert resp.status_code in (200, 201)
 
 
