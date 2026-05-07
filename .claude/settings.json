@@ -24,5 +24,21 @@
       "Bash(git -C /Users/gowtham/Adroit/Projects/iaas merge main --ff-only)",
       "Bash(git add *)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git push *)",
+            "command": "cmd=$(jq -r '.tool_input.command'); if echo \"$cmd\" | grep -qE 'git push.*(main|origin main|origin)'; then echo 'Running pytest before push to main...' >&2; cd /Users/gowtham/Adroit/Projects/iaas/iaas-backend && /Users/gowtham/Adroit/Projects/iaas/.venv/bin/pytest tests/ -q --tb=short 2>&1; rc=$?; if [ $rc -ne 0 ]; then echo '{\"continue\": false, \"stopReason\": \"Tests failed — push to main blocked. Fix the failing tests before pushing.\"}'; else echo '{\"continue\": true}'; fi; else echo '{\"continue\": true}'; fi",
+            "timeout": 120,
+            "statusMessage": "Running tests before push..."
+          }
+        ]
+      }
+    ]
   }
 }
