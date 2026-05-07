@@ -129,7 +129,11 @@ def _parse_hhmm(value: str) -> Optional[time]:
     if not isinstance(value, str):
         return None
     try:
-        parsed = time.fromisoformat(value)
+        normalized = value.strip()
+        # If only HH:MM is provided (5 chars: HH:MM), append :00 for seconds
+        if len(normalized) == 5 and normalized[2] == ':':
+            normalized = normalized + ":00"
+        parsed = time.fromisoformat(normalized)
         return parsed.replace(second=0, microsecond=0)
     except ValueError:
         return None
