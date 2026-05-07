@@ -754,17 +754,21 @@ def create_panelist_availability():
         return jsonify({"errors": {"slots": ["slots must be a non-empty list"]}}), 400
 
     panelist_id = user.id
-    panelist = user  # default to current user for non-ADMIN roles
+    
     if role == UserRole.ADMIN.value:
         requested_panelist_id = payload.get("panelist_id")
         if requested_panelist_id is not None:
             if not isinstance(requested_panelist_id, int) or requested_panelist_id <= 0:
                 return jsonify({"errors": {"panelist_id": ["panelist_id must be a positive integer"]}}), 400
             panelist_id = requested_panelist_id
+        # For ADMIN, fetch the user to verify they're a panelist
         panelist = db.session.get(User, panelist_id)
-
-    if panelist is None or panelist.role != UserRole.PANELIST.value:
-        return jsonify({"error": "Target user must have PANELIST role"}), 400
+        if panelist is None or panelist.role != UserRole.PANELIST.value:
+            return jsonify({"error": "Target user must have PANELIST role"}), 400
+    else:
+        # For non-ADMIN panelists, verify their own role from JWT
+        if role != UserRole.PANELIST.value:
+            return jsonify({"error": "Only PANELISTs can create availability slots"}), 403
 
     created = 0
     created_at = datetime.now(timezone.utc).replace(tzinfo=None)
