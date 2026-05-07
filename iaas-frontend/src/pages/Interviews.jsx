@@ -8,6 +8,7 @@ import { getJDs } from '../api/jdApi'
 import { getUsers } from '../api/usersApi'
 import useAuthStore from '../store/authStore'
 import AppShell from '../components/AppShell'
+import RescheduleCountdownBadge from '../components/RescheduleCountdownBadge'
 import {
   AlertBanner,
   Badge,
@@ -20,12 +21,14 @@ import {
   FormInput,
   FormTextarea,
   LoadingState,
+  ModalOverlay,
   PrimaryBtn,
   SearchSelect,
   SecondaryBtn,
   TableCell,
   TableRow,
 } from '../components/ui'
+import { getRescheduleDaysLeft } from '../utils/rescheduleWindow'
 
 const TIMEZONE_OPTIONS = [
   { value: 'America/New_York', label: 'Eastern Time (ET) — New York' },
@@ -66,6 +69,12 @@ const INTERVIEW_STATUS_VARIANTS = {
   IN_PROGRESS: 'amber',
   COMPLETED: 'green',
   CANCELLED: 'red',
+  ABSENT: 'amber',
+}
+
+const OUTCOME_VARIANTS = {
+  SELECTED: 'green',
+  NOT_SELECTED: 'red',
 }
 
 function formatLocalDateTime(isoString, timezone) {
@@ -101,6 +110,262 @@ function formatISTDateTime(isoString) {
   }
 }
 
+function getCandidateRescheduleDaysLeft(candidate, lastInterview, currentTimeMs) {
+  return getRescheduleDaysLeft(
+    candidate?.status_updated_at || lastInterview?.scheduled_at_local || lastInterview?.scheduled_at,
+    currentTimeMs
+  )
+}
+
+// ─── Outcome Modal ─────────────────────────────────────────────────────────────
+function OutcomeModal({ interview, onConfirm, onClose, isSubmitting }) {
+  const [outcome, setOutcome] = useState('')
+
+  return (
+    <ModalOverlay onClose={onClose}>
+      <div className="p-6">
+        <div className="flex items-start gap-4 mb-6">
+          <div className="flex-shrink-0 w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center">
+            <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900">Mark Interview as Completed</h3>
+            <p className="text-sm text-slate-500 mt-0.5">
+              {interview.candidate_name} · {interview.jd_title}
+            </p>
+          </div>
+        </div>
+
+        <p className="text-sm text-slate-600 mb-5">
+          Select the outcome for this interview. This will update the candidate's status and lock in
+          the result.
+        </p>
+
+        <div className="grid grid-cols-2 gap-3 mb-6">
+          <button
+            type="button"
+            onClick={() => setOutcome('SELECTED')}
+            className={`relative flex flex-col items-center gap-2 rounded-xl border-2 p-4 text-center transition-all focus:outline-none ${
+              outcome === 'SELECTED'
+                ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200'
+                : 'border-slate-200 bg-white hover:border-emerald-300 hover:bg-emerald-50/50'
+            }`}
+          >
+            {outcome === 'SELECTED' && (
+              <span className="absolute top-2 right-2 w-4 h-4 rounded-full bg-emerald-500 flex items-center justify-center">
+                <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 12 12">
+                  <path d="M10 3L5 8.5 2 5.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                </svg>
+              </span>
+            )}
+            <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center">
+              <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <div>
+              <div className="font-semibold text-slate-900 text-sm">Selected</div>
+              <div className="text-xs text-slate-500 mt-0.5">Candidate passed</div>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setOutcome('NOT_SELECTED')}
+            className={`relative flex flex-col items-center gap-2 rounded-xl border-2 p-4 text-center transition-all focus:outline-none ${
+              outcome === 'NOT_SELECTED'
+                ? 'border-red-500 bg-red-50 ring-2 ring-red-200'
+                : 'border-slate-200 bg-white hover:border-red-300 hover:bg-red-50/50'
+            }`}
+          >
+            {outcome === 'NOT_SELECTED' && (
+              <span className="absolute top-2 right-2 w-4 h-4 rounded-full bg-red-500 flex items-center justify-center">
+                <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 12 12">
+                  <path d="M10 3L5 8.5 2 5.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                </svg>
+              </span>
+            )}
+            <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+              <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </div>
+            <div>
+              <div className="font-semibold text-slate-900 text-sm">Not Selected</div>
+              <div className="text-xs text-slate-500 mt-0.5">60-day re-apply lock</div>
+            </div>
+          </button>
+        </div>
+
+        {outcome === 'NOT_SELECTED' && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-5 flex gap-3">
+            <svg className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p className="text-xs text-amber-800">
+              Marking as <strong>Not Selected</strong> will start a 60-day cooling period from the
+              interview date. The candidate cannot be re-added to this JD during this period.
+            </p>
+          </div>
+        )}
+
+        <div className="flex gap-3 justify-end">
+          <SecondaryBtn onClick={onClose} disabled={isSubmitting}>
+            Cancel
+          </SecondaryBtn>
+          <PrimaryBtn
+            onClick={() => outcome && onConfirm(outcome)}
+            disabled={!outcome || isSubmitting}
+            loading={isSubmitting}
+          >
+            {isSubmitting ? 'Saving…' : 'Confirm Outcome'}
+          </PrimaryBtn>
+        </div>
+      </div>
+    </ModalOverlay>
+  )
+}
+
+// ─── Absent Confirm Modal ──────────────────────────────────────────────────────
+function AbsentModal({ interview, onConfirm, onClose, isSubmitting }) {
+  return (
+    <ModalOverlay onClose={onClose}>
+      <div className="p-6">
+        <div className="flex items-start gap-4 mb-6">
+          <div className="flex-shrink-0 w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+            <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900">Mark as No-Show / Absent</h3>
+            <p className="text-sm text-slate-500 mt-0.5">
+              {interview.candidate_name} · {interview.jd_title}
+            </p>
+          </div>
+        </div>
+
+        <p className="text-sm text-slate-600 mb-4">
+          The candidate did not attend this interview. You can reschedule them for a new date after
+          marking them absent.
+        </p>
+
+        <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 mb-6 flex gap-3">
+          <svg className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <p className="text-xs text-blue-800">
+            No cooling period applies. You can schedule a new interview for this candidate
+            immediately after marking them absent.
+          </p>
+        </div>
+
+        <div className="flex gap-3 justify-end">
+          <SecondaryBtn onClick={onClose} disabled={isSubmitting}>
+            Cancel
+          </SecondaryBtn>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={isSubmitting}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold transition-colors disabled:opacity-50"
+          >
+            {isSubmitting ? 'Saving…' : 'Mark Absent'}
+          </button>
+        </div>
+      </div>
+    </ModalOverlay>
+  )
+}
+
+// ─── Action Menu for interview rows ───────────────────────────────────────────
+function InterviewActions({ interview, canSchedule, onCancel, onMarkOutcome, onMarkAbsent, onReschedule, cancellingId, currentTimeMs }) {
+  const isActive = ['SCHEDULED', 'IN_PROGRESS'].includes(interview.status)
+  const isAbsent = interview.status === 'ABSENT'
+  const isCompletedNotSelected = interview.status === 'COMPLETED' && interview.outcome === 'NOT_SELECTED'
+  const isCancelling = cancellingId === interview.id
+  const rescheduleDaysLeft = isCompletedNotSelected
+    ? getRescheduleDaysLeft(interview.scheduled_at_local || interview.scheduled_at, currentTimeMs)
+    : null
+
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      {interview.meeting_link && (
+        <CopyLinkButton meetingLink={interview.meeting_link} />
+      )}
+
+      {canSchedule && isActive && (
+        <>
+          <button
+            type="button"
+            onClick={() => onMarkOutcome(interview)}
+            className="text-xs px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 font-medium transition-colors whitespace-nowrap"
+          >
+            Attended
+          </button>
+          <button
+            type="button"
+            onClick={() => onMarkAbsent(interview)}
+            className="text-xs px-2.5 py-1.5 rounded-lg bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 font-medium transition-colors whitespace-nowrap"
+          >
+            Absent
+          </button>
+          <button
+            type="button"
+            onClick={() => onCancel(interview.id)}
+            disabled={isCancelling}
+            className="text-xs px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 font-medium transition-colors disabled:opacity-50 whitespace-nowrap"
+          >
+            {isCancelling ? 'Cancelling…' : 'Cancel'}
+          </button>
+        </>
+      )}
+
+      {canSchedule && isAbsent && (
+        <button
+          type="button"
+          onClick={() => onReschedule(interview)}
+          className="text-xs px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 font-medium transition-colors whitespace-nowrap"
+        >
+          Reschedule
+        </button>
+      )}
+
+      {canSchedule && isCompletedNotSelected && (
+        <RescheduleCountdownBadge
+          daysLeft={rescheduleDaysLeft}
+          onClick={rescheduleDaysLeft === 0 ? () => onReschedule(interview) : undefined}
+        />
+      )}
+    </div>
+  )
+}
+
+function CopyLinkButton({ meetingLink }) {
+  const [copied, setCopied] = useState(false)
+
+  function handleCopy() {
+    navigator.clipboard.writeText(meetingLink).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      title="Copy meeting link"
+      className="text-xs px-2.5 py-1.5 rounded-lg bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200 font-medium transition-colors whitespace-nowrap"
+    >
+      {copied ? '✓ Copied' : 'Copy Link'}
+    </button>
+  )
+}
+
+// ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function Interviews() {
   const user = useAuthStore((state) => state.user)
   const canSchedule = ['OPERATOR', 'ADMIN', 'M_RECRUITER', 'SR_RECRUITER'].includes(user?.role)
@@ -126,6 +391,12 @@ export default function Interviews() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
+  // Modal state
+  const [outcomeModal, setOutcomeModal] = useState(null)   // interview object
+  const [absentModal, setAbsentModal] = useState(null)      // interview object
+  const [isModalSubmitting, setIsModalSubmitting] = useState(false)
+  const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now())
+
   const jdOptions = useMemo(() => {
     const visibleJds = isRecruiterScopedRole
       ? jds.filter((jd) => String(jd.client_id) === String(user?.client_id) && jd.status === 'ACTIVE')
@@ -149,6 +420,11 @@ export default function Interviews() {
   }
 
   useEffect(() => {
+    const intervalId = window.setInterval(() => setCurrentTimeMs(Date.now()), 60 * 1000)
+    return () => window.clearInterval(intervalId)
+  }, [])
+
+  useEffect(() => {
     let active = true
 
     async function loadBaseData() {
@@ -157,9 +433,7 @@ export default function Interviews() {
         setError('')
 
         const requests = [getJDs(), getClients(), getInterviews()]
-        if (canSchedule) {
-          requests.push(getUsers())
-        }
+        if (canSchedule) requests.push(getUsers())
 
         const [jdsResponse, clientsResponse, interviewsResponse, usersResponse] = await Promise.all(requests)
         if (!active) return
@@ -183,12 +457,9 @@ export default function Interviews() {
     }
 
     loadBaseData()
-    return () => {
-      active = false
-    }
+    return () => { active = false }
   }, [canSchedule])
 
-  // Auto-select JD + candidate when arriving from the Candidates page
   useEffect(() => {
     if (!preselectedJdId || isLoading || !canSchedule) return
 
@@ -204,7 +475,7 @@ export default function Interviews() {
         const jdInterviewList = interviewsResponse.data?.interviews || []
 
         setSelectedJdId(preselectedJdId)
-        setFormData((prev) => ({ ...DEFAULT_FORM, jd_id: preselectedJdId }))
+        setFormData({ ...DEFAULT_FORM, jd_id: preselectedJdId })
         setJdCandidates(candidates)
         setJdInterviews(jdInterviewList)
 
@@ -235,15 +506,17 @@ export default function Interviews() {
     setInterviews(response.data?.interviews || [])
   }
 
+  async function refreshJdInterviews() {
+    if (!selectedJdId) return
+    const response = await getInterviews({ jd_id: Number(selectedJdId) })
+    setJdInterviews(response.data?.interviews || [])
+  }
+
   async function handleJdSelect(jdId) {
     setSelectedJdId(jdId)
-    setFormData((previous) => ({
-      ...DEFAULT_FORM,
-      jd_id: jdId,
-    }))
+    setFormData({ ...DEFAULT_FORM, jd_id: jdId })
     setJdCandidates([])
     setJdInterviews([])
-
     if (!jdId) return
 
     try {
@@ -262,10 +535,14 @@ export default function Interviews() {
     }
   }
 
-  function getCandidateInterviewStatus(candidateId) {
+  function getActiveInterviewForCandidate(candidateId) {
     return jdInterviews.find(
-      (interview) => interview.candidate_id === candidateId && interview.status !== 'CANCELLED',
+      (iv) => iv.candidate_id === candidateId && ['SCHEDULED', 'IN_PROGRESS'].includes(iv.status)
     ) || null
+  }
+
+  function getLastInterviewForCandidate(candidateId) {
+    return jdInterviews.find((iv) => iv.candidate_id === candidateId) || null
   }
 
   function togglePanelist(panelistId) {
@@ -274,11 +551,7 @@ export default function Interviews() {
       const nextIds = exists
         ? previous.panelist_ids.filter((id) => id !== panelistId)
         : [...previous.panelist_ids, panelistId].slice(0, 3)
-
-      return {
-        ...previous,
-        panelist_ids: nextIds,
-      }
+      return { ...previous, panelist_ids: nextIds }
     })
   }
 
@@ -288,7 +561,7 @@ export default function Interviews() {
       setCancellingId(interviewId)
       setError('')
       await updateInterviewStatus(interviewId, 'CANCELLED')
-      await refreshInterviews()
+      await Promise.all([refreshInterviews(), refreshJdInterviews()])
       setSuccess('Interview cancelled successfully.')
     } catch (err) {
       setError(err?.response?.data?.error || 'Failed to cancel interview.')
@@ -297,11 +570,53 @@ export default function Interviews() {
     }
   }
 
-  function copyMeetingLink(meetingLink) {
-    if (!meetingLink) return
-    navigator.clipboard.writeText(meetingLink)
-      .then(() => setSuccess('Meeting link copied to clipboard.'))
-      .catch(() => setError('Could not copy link.'))
+  async function handleConfirmOutcome(outcome) {
+    if (!outcomeModal) return
+    try {
+      setIsModalSubmitting(true)
+      setError('')
+      await updateInterviewStatus(outcomeModal.id, 'COMPLETED', outcome)
+      await Promise.all([refreshInterviews(), refreshJdInterviews()])
+      setSuccess(`Interview marked as Completed — candidate ${outcome === 'SELECTED' ? 'Selected' : 'Not Selected'}.`)
+      setOutcomeModal(null)
+    } catch (err) {
+      setError(err?.response?.data?.error || err?.response?.data?.errors?.outcome?.[0] || 'Failed to update interview.')
+      setOutcomeModal(null)
+    } finally {
+      setIsModalSubmitting(false)
+    }
+  }
+
+  async function handleConfirmAbsent() {
+    if (!absentModal) return
+    try {
+      setIsModalSubmitting(true)
+      setError('')
+      await updateInterviewStatus(absentModal.id, 'ABSENT')
+      await Promise.all([refreshInterviews(), refreshJdInterviews()])
+      setSuccess('Interview marked as Absent. You can now reschedule the candidate.')
+      setAbsentModal(null)
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Failed to update interview.')
+      setAbsentModal(null)
+    } finally {
+      setIsModalSubmitting(false)
+    }
+  }
+
+  function handleReschedule(interview) {
+    // Pre-fill the scheduling form for this candidate
+    const jdId = String(interview.jd_id)
+    setSelectedJdId(jdId)
+    setFormData({
+      ...DEFAULT_FORM,
+      jd_id: jdId,
+      candidate_id: String(interview.candidate_id),
+      candidate_email: interview.candidate_email,
+    })
+    // If on same JD, refresh; otherwise load fresh
+    handleJdSelect(jdId)
+    setTimeout(() => scheduleFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150)
   }
 
   async function handleSubmit(event) {
@@ -334,13 +649,14 @@ export default function Interviews() {
       await createInterview(payload)
       await Promise.all([refreshInterviews(), handleJdSelect(selectedJdId)])
       setSuccess('Interview scheduled successfully.')
-      setFormData((previous) => ({
-        ...DEFAULT_FORM,
-        jd_id: previous.jd_id,
-      }))
+      setFormData((previous) => ({ ...DEFAULT_FORM, jd_id: previous.jd_id }))
       scheduledInterviewsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     } catch (submitError) {
-      setError(submitError?.response?.data?.error || submitError?.response?.data?.message || 'Failed to schedule interview.')
+      setError(
+        submitError?.response?.data?.error ||
+        submitError?.response?.data?.message ||
+        'Failed to schedule interview.'
+      )
     } finally {
       setIsSubmitting(false)
     }
@@ -371,6 +687,24 @@ export default function Interviews() {
 
   return (
     <AppShell>
+      {/* Modals */}
+      {outcomeModal && (
+        <OutcomeModal
+          interview={outcomeModal}
+          onConfirm={handleConfirmOutcome}
+          onClose={() => setOutcomeModal(null)}
+          isSubmitting={isModalSubmitting}
+        />
+      )}
+      {absentModal && (
+        <AbsentModal
+          interview={absentModal}
+          onConfirm={handleConfirmAbsent}
+          onClose={() => setAbsentModal(null)}
+          isSubmitting={isModalSubmitting}
+        />
+      )}
+
       <AlertBanner type="error" message={error} />
       <AlertBanner type="success" message={success} />
 
@@ -408,7 +742,17 @@ export default function Interviews() {
                     <tr><td colSpan={6}><EmptyState message="No candidates found under this JD" /></td></tr>
                   ) : (
                     jdCandidates.map((candidate) => {
-                      const interview = getCandidateInterviewStatus(candidate.id)
+                      const activeInterview = getActiveInterviewForCandidate(candidate.id)
+                      const lastInterview = getLastInterviewForCandidate(candidate.id)
+                      const canScheduleThis = !activeInterview
+                      const shouldShowReschedule = canScheduleThis && (
+                        candidate.status === 'NOT_SELECTED' ||
+                        lastInterview?.outcome === 'NOT_SELECTED'
+                      )
+                      const rescheduleDaysLeft = shouldShowReschedule
+                        ? getCandidateRescheduleDaysLeft(candidate, lastInterview, currentTimeMs)
+                        : null
+
                       return (
                         <TableRow key={candidate.id}>
                           <TableCell className="font-medium">{candidate.email || '—'}</TableCell>
@@ -420,22 +764,42 @@ export default function Interviews() {
                             </Badge>
                           </TableCell>
                           <TableCell>
-                            {interview ? (
+                            {activeInterview ? (
                               <div>
                                 <Badge variant="blue">Scheduled</Badge>
                                 <div className="text-xs text-slate-500 mt-1">
-                                  {formatLocalDateTime(interview.scheduled_at_local || interview.scheduled_at, interview.timezone)}
+                                  {formatLocalDateTime(activeInterview.scheduled_at_local || activeInterview.scheduled_at, activeInterview.timezone)}
                                 </div>
+                              </div>
+                            ) : lastInterview ? (
+                              <div>
+                                <Badge variant={INTERVIEW_STATUS_VARIANTS[lastInterview.status] || 'gray'}>
+                                  {lastInterview.status}
+                                </Badge>
+                                {lastInterview.outcome && (
+                                  <div className="mt-1">
+                                    <Badge variant={OUTCOME_VARIANTS[lastInterview.outcome] || 'gray'}>
+                                      {lastInterview.outcome === 'SELECTED' ? 'Selected' : 'Not Selected'}
+                                    </Badge>
+                                  </div>
+                                )}
                               </div>
                             ) : (
                               <Badge variant="gray">Not Scheduled</Badge>
                             )}
                           </TableCell>
                           <TableCell>
-                            {!interview ? (
-                              <PrimaryBtn onClick={() => selectCandidateForScheduling(candidate)}>
-                                Schedule
-                              </PrimaryBtn>
+                            {canScheduleThis ? (
+                              shouldShowReschedule ? (
+                                <RescheduleCountdownBadge
+                                  daysLeft={rescheduleDaysLeft}
+                                  onClick={rescheduleDaysLeft === 0 ? () => selectCandidateForScheduling(candidate) : undefined}
+                                />
+                              ) : (
+                                <PrimaryBtn onClick={() => selectCandidateForScheduling(candidate)}>
+                                  Schedule
+                                </PrimaryBtn>
+                              )
                             ) : (
                               <SecondaryBtn onClick={() => scheduledInterviewsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
                                 View
@@ -575,6 +939,7 @@ export default function Interviews() {
         </>
       )}
 
+      {/* ─── Interviews Table ─────────────────────────────────────────────── */}
       <Card>
         <div ref={scheduledInterviewsRef} />
         <div className="flex items-center justify-between gap-3 mb-4">
@@ -608,32 +973,28 @@ export default function Interviews() {
                   </div>
                 </TableCell>
                 <TableCell>
-                  <Badge variant={INTERVIEW_STATUS_VARIANTS[interview.status] || 'gray'}>{interview.status || 'UNKNOWN'}</Badge>
-                </TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {interview.meeting_link && (
-                      <button
-                        type="button"
-                        onClick={() => copyMeetingLink(interview.meeting_link)}
-                        title="Copy meeting link"
-                        className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 transition-colors"
-                      >
-                        Copy Link
-                      </button>
-                    )}
-                    {canSchedule && !['CANCELLED', 'COMPLETED'].includes(interview.status) && (
-                      <button
-                        type="button"
-                        onClick={() => handleCancelInterview(interview.id)}
-                        disabled={cancellingId === interview.id}
-                        title="Cancel interview"
-                        className="text-xs px-2 py-1 rounded bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition-colors disabled:opacity-50"
-                      >
-                        {cancellingId === interview.id ? 'Cancelling…' : 'Cancel'}
-                      </button>
+                  <div className="flex flex-col gap-1">
+                    <Badge variant={INTERVIEW_STATUS_VARIANTS[interview.status] || 'gray'}>
+                      {interview.status || 'UNKNOWN'}
+                    </Badge>
+                    {interview.outcome && (
+                      <Badge variant={OUTCOME_VARIANTS[interview.outcome] || 'gray'}>
+                        {interview.outcome === 'SELECTED' ? 'Selected' : 'Not Selected'}
+                      </Badge>
                     )}
                   </div>
+                </TableCell>
+                <TableCell>
+                  <InterviewActions
+                    interview={interview}
+                    canSchedule={canSchedule}
+                    cancellingId={cancellingId}
+                    currentTimeMs={currentTimeMs}
+                    onCancel={handleCancelInterview}
+                    onMarkOutcome={(iv) => setOutcomeModal(iv)}
+                    onMarkAbsent={(iv) => setAbsentModal(iv)}
+                    onReschedule={handleReschedule}
+                  />
                 </TableCell>
               </TableRow>
             ))

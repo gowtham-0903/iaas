@@ -21,11 +21,13 @@ import { getClients } from '../api/clientsApi'
 import { getInterviews } from '../api/interviewsApi'
 import { getJDs } from '../api/jdApi'
 import AppShell from '../components/AppShell'
+import RescheduleCountdownBadge from '../components/RescheduleCountdownBadge'
 import {
   AlertBanner, Avatar, Badge, Card, CardTitle, DataTable,
   EmptyState, FormField, FormInput, FormSelect, LoadingState,
   PrimaryBtn, SearchSelect, SecondaryBtn, TableCell, TableRow,
 } from '../components/ui'
+import { getRescheduleDaysLeft } from '../utils/rescheduleWindow'
 
 const CANDIDATE_STATUSES = ['APPLIED', 'SHORTLISTED', 'INTERVIEWED', 'SELECTED', 'NOT_SELECTED']
 
@@ -35,6 +37,7 @@ const STATUS_VARIANTS = {
   INTERVIEWED: 'amber',
   SHORTLISTED: 'blue',
   APPLIED: 'gray',
+  SCHEDULED: 'blue',
 }
 
 const IST_TIMEZONE = 'Asia/Kolkata'
@@ -76,6 +79,13 @@ function formatDateTimeInIST(value) {
   })
 }
 
+function getCandidateLockDaysLeft(candidate, interview, currentTimeMs) {
+  return getRescheduleDaysLeft(
+    candidate?.status_updated_at || interview?.scheduled_at_local || interview?.scheduled_at,
+    currentTimeMs
+  )
+}
+
 export default function Candidates() {
   const [searchParams] = useSearchParams()
   const initialClientId = searchParams.get('clientId') || ''
@@ -91,19 +101,19 @@ export default function Candidates() {
   const [selectedClientId, setSelectedClientId] = useState(initialClientId || recruiterClientId)
   const [selectedJdId, setSelectedJdId] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
-  const [createStep, setCreateStep] = useState('form')
+  // createStep: 'setup' | 'upload' | 'preview'
+  const [createStep, setCreateStep] = useState('setup')
   const [formData, setFormData] = useState(() => getDefaultForm(initialClientId || recruiterClientId))
-  const [createdCandidate, setCreatedCandidate] = useState(null)
-  const [resumeFile, setResumeFile] = useState(null)
-  const [resumeError, setResumeError] = useState('')
-  const [isResumeProcessing, setIsResumeProcessing] = useState(false)
-  const [extractedForm, setExtractedForm] = useState({ full_name: '', email: '', phone: '' })
-  const [showExtractedEditor, setShowExtractedEditor] = useState(false)
+  const [singleFile, setSingleFile] = useState(null)
+  const [singleFileError, setSingleFileError] = useState('')
+  const [singleExtracted, setSingleExtracted] = useState(null) // { full_name, email, phone, skills }
+  const [isSingleExtracting, setIsSingleExtracting] = useState(false)
+  const [isSingleCreating, setIsSingleCreating] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
-  const [interviewCounts, setInterviewCounts] = useState({})
+  const [interviewMap, setInterviewMap] = useState({})
   
   // Bulk upload state
   const [showBulkUpload, setShowBulkUpload] = useState(false)
@@ -119,9 +129,15 @@ export default function Candidates() {
   // Modal for viewing extracted resume details
   const [showExtractedModal, setShowExtractedModal] = useState(false)
   const [selectedCandidateForView, setSelectedCandidateForView] = useState(null)
+  const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now())
 
   const jdMap = useMemo(() => new Map(jds.map((jd) => [jd.id, jd])), [jds])
   const clientMap = useMemo(() => new Map(clients.map((client) => [client.id, client.name])), [clients])
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setCurrentTimeMs(Date.now()), 60 * 1000)
+    return () => window.clearInterval(intervalId)
+  }, [])
 
   const filteredJds = useMemo(() => {
     const activeJds = jds.filter((jd) => jd.status === 'ACTIVE')
@@ -206,12 +222,16 @@ export default function Candidates() {
       const nextInterviews = interviewsResponse.data?.interviews ?? []
 
       setCandidates(nextCandidates)
-      setInterviewCounts(
-        nextInterviews.reduce((counts, interview) => {
-          counts[interview.candidate_id] = (counts[interview.candidate_id] || 0) + 1
-          return counts
-        }, {}),
-      )
+      // Build map: candidate_id → interviews sorted by id desc (latest first)
+      const grouped = {}
+      for (const iv of nextInterviews) {
+        if (!grouped[iv.candidate_id]) grouped[iv.candidate_id] = []
+        grouped[iv.candidate_id].push(iv)
+      }
+      for (const key of Object.keys(grouped)) {
+        grouped[key].sort((a, b) => b.id - a.id)
+      }
+      setInterviewMap(grouped)
     } catch (_loadError) {
       setError('Unable to load candidates data.')
     } finally {
@@ -226,154 +246,88 @@ export default function Candidates() {
 
   function resetForm() {
     setFormData(getDefaultForm(isRecruiterScopedRole ? recruiterClientId : (selectedClientId || '')))
-    setCreateStep('form')
-    setCreatedCandidate(null)
-    setResumeFile(null)
-    setResumeError('')
-    setIsResumeProcessing(false)
-    setExtractedForm({ full_name: '', email: '', phone: '' })
-    setShowExtractedEditor(false)
+    setCreateStep('setup')
+    setSingleFile(null)
+    setSingleFileError('')
+    setSingleExtracted(null)
+    setIsSingleExtracting(false)
+    setIsSingleCreating(false)
     setShowCreateForm(false)
   }
 
-  async function handleCreateCandidate(event) {
-    event.preventDefault()
-    const effectiveClientId = isRecruiterScopedRole ? recruiterClientId : formData.client_id
-
-    if (!effectiveClientId || !formData.jd_id) {
-      setError('Client and job description are required.')
+  function handleSingleFileSelect(file) {
+    setSingleFileError('')
+    if (!file) { setSingleFile(null); return }
+    const ext = file.name.split('.').pop()?.toLowerCase()
+    if (!['pdf', 'docx'].includes(ext || '')) {
+      setSingleFile(null)
+      setSingleFileError('Only .pdf and .docx files are supported.')
       return
     }
-
-    try {
-      setIsSubmitting(true)
-      setError('')
-      setSuccess('')
-
-      const createResponse = await createCandidate({
-        client_id: Number(effectiveClientId),
-        jd_id: Number(formData.jd_id),
-        full_name: formData.full_name,
-        email: formData.email,
-        status: formData.status,
-      })
-
-      await loadData()
-      const nextCandidate = createResponse?.data?.candidate
-      setCreatedCandidate(nextCandidate || null)
-      setCreateStep('resume')
-      setResumeFile(null)
-      setResumeError('')
-      setShowExtractedEditor(false)
-      setExtractedForm({
-        full_name: nextCandidate?.full_name || formData.full_name,
-        email: nextCandidate?.email || formData.email,
-        phone: nextCandidate?.phone || '',
-      })
-      setSuccess('Candidate created successfully. Upload resume to auto-fill details.')
-    } catch (createError) {
-      setError(createError?.response?.data?.error || 'Failed to create candidate.')
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  function handleResumeFileChange(event) {
-    const file = event.target.files?.[0]
-    setResumeError('')
-    setShowExtractedEditor(false)
-
-    if (!file) {
-      setResumeFile(null)
-      return
-    }
-
-    const extension = file.name.split('.').pop()?.toLowerCase()
-    if (!['pdf', 'docx'].includes(extension || '')) {
-      setResumeFile(null)
-      setResumeError('Only .pdf and .docx files are supported')
-      return
-    }
-
     if (file.size > 2 * 1024 * 1024) {
-      setResumeFile(null)
-      setResumeError('File must be under 2MB')
+      setSingleFile(null)
+      setSingleFileError('File must be under 2 MB.')
       return
     }
-
-    setResumeFile(file)
+    setSingleFile(file)
   }
 
-  async function handleUploadAndExtractResume() {
-    if (!createdCandidate?.id) {
-      setResumeError('Candidate context not found. Please create again.')
-      return
-    }
-    if (!resumeFile) {
-      setResumeError('Please choose a resume file first.')
-      return
-    }
-
+  async function handleSingleExtract() {
+    const effectiveClientId = isRecruiterScopedRole ? recruiterClientId : formData.client_id
+    if (!singleFile) { setSingleFileError('Please select a resume file first.'); return }
     try {
-      setIsResumeProcessing(true)
-      setResumeError('')
-      setSuccess('')
-
-      await uploadResume(createdCandidate.id, resumeFile)
-      const extractResponse = await extractResume(createdCandidate.id)
-      const extracted = extractResponse?.data?.extracted || {}
-      const updatedCandidate = extractResponse?.data?.candidate
-
-      setExtractedForm({
-        full_name: extracted.full_name || updatedCandidate?.full_name || '',
-        email: extracted.email || updatedCandidate?.email || '',
-        phone: extracted.phone || updatedCandidate?.phone || '',
-      })
-      setShowExtractedEditor(true)
-
-      if (updatedCandidate) {
-        setCreatedCandidate(updatedCandidate)
+      setIsSingleExtracting(true)
+      setSingleFileError('')
+      const response = await bulkUploadResumes(Number(formData.jd_id), Number(effectiveClientId), [singleFile])
+      const result = response.data?.results?.[0]
+      if (!result) throw new Error('No extraction result returned.')
+      if (result.status === 'failed') {
+        setSingleFileError(result.error || 'Failed to extract resume data.')
+        return
       }
-
-      await loadData()
-      setSuccess('Resume uploaded and details extracted successfully.')
-    } catch (extractError) {
-      setResumeError(extractError?.response?.data?.error || 'Failed to upload/extract resume.')
-    } finally {
-      setIsResumeProcessing(false)
-    }
-  }
-
-  async function handleConfirmExtractedDetails() {
-    if (!createdCandidate?.id) {
-      setResumeError('Candidate context not found. Please create again.')
-      return
-    }
-
-    try {
-      setIsSubmitting(true)
-      setResumeError('')
-      setSuccess('')
-
-      await updateCandidate(createdCandidate.id, {
-        full_name: extractedForm.full_name,
-        email: extractedForm.email,
-        phone: extractedForm.phone,
+      if (result.status === 'rejected') {
+        setSingleFileError(result.error || 'Resume rejected.')
+        return
+      }
+      const ext = result.extracted || {}
+      setSingleExtracted({
+        full_name: ext.full_name || '',
+        email: ext.email || '',
+        phone: ext.phone || '',
+        skills: Array.isArray(ext.skills) ? ext.skills : [],
       })
-
-      await loadData()
-      setSuccess('Candidate details saved successfully.')
-      resetForm()
-    } catch (confirmError) {
-      setResumeError(confirmError?.response?.data?.error || 'Failed to save candidate details.')
+      setCreateStep('preview')
+    } catch (err) {
+      setSingleFileError(err?.response?.data?.error || err.message || 'Extraction failed.')
     } finally {
-      setIsSubmitting(false)
+      setIsSingleExtracting(false)
     }
   }
 
-  function handleSkipResumeUpload() {
-    setSuccess('Candidate created successfully.')
-    resetForm()
+  async function handleSingleCreate() {
+    const effectiveClientId = isRecruiterScopedRole ? recruiterClientId : formData.client_id
+    if (!singleExtracted || !singleFile) return
+    try {
+      setIsSingleCreating(true)
+      setSingleFileError('')
+      const fd = new FormData()
+      fd.append('client_id', String(Number(effectiveClientId)))
+      fd.append('jd_id', String(Number(formData.jd_id)))
+      fd.append('full_name', singleExtracted.full_name.trim())
+      fd.append('email', singleExtracted.email.trim())
+      fd.append('status', 'APPLIED')
+      if (singleExtracted.phone?.trim()) fd.append('phone', singleExtracted.phone.trim())
+      if (singleExtracted.skills.length > 0) fd.append('candidate_extracted_skills', JSON.stringify(singleExtracted.skills))
+      fd.append('resume', singleFile)
+      await createCandidateWithResume(fd)
+      await loadData()
+      setSuccess('Candidate added successfully.')
+      resetForm()
+    } catch (err) {
+      setSingleFileError(err?.response?.data?.error || 'Failed to create candidate.')
+    } finally {
+      setIsSingleCreating(false)
+    }
   }
 
   async function handleDownloadResume(candidate) {
@@ -828,6 +782,26 @@ export default function Candidates() {
     setSuccess(`Exported ${candidates.length} candidate${candidates.length === 1 ? '' : 's'} to PDF`)
   }
 
+  // Returns the most relevant interview for display purposes.
+  // Active (SCHEDULED/IN_PROGRESS) wins; otherwise latest non-CANCELLED.
+  function getEffectiveInterview(candidateId) {
+    const ivs = interviewMap[candidateId] || []
+    const active = ivs.find((iv) => ['SCHEDULED', 'IN_PROGRESS'].includes(iv.status))
+    if (active) return active
+    return ivs.find((iv) => iv.status !== 'CANCELLED') || null
+  }
+
+  // Derive a display-ready state from the effective interview.
+  function getInterviewState(candidateId) {
+    const iv = getEffectiveInterview(candidateId)
+    if (!iv) return { tag: 'none', interview: null }
+    if (['SCHEDULED', 'IN_PROGRESS'].includes(iv.status)) return { tag: 'active', interview: iv }
+    if (iv.status === 'ABSENT') return { tag: 'absent', interview: iv }
+    if (iv.status === 'COMPLETED' && iv.outcome === 'SELECTED') return { tag: 'selected', interview: iv }
+    if (iv.status === 'COMPLETED' && iv.outcome === 'NOT_SELECTED') return { tag: 'rejected', interview: iv }
+    return { tag: 'none', interview: null }
+  }
+
   return (
     <AppShell>
       {!isPanelist && (
@@ -852,16 +826,18 @@ export default function Candidates() {
             </PrimaryBtn>
             <PrimaryBtn
               onClick={() => {
-                setShowCreateForm((previous) => !previous)
-                setCreateStep('form')
-                setFormData(getDefaultForm(isRecruiterScopedRole ? recruiterClientId : (selectedClientId || '')))
-                setCreatedCandidate(null)
-                setResumeFile(null)
-                setResumeError('')
-                setShowExtractedEditor(false)
-                setExtractedForm({ full_name: '', email: '', phone: '' })
-                setError('')
-                setSuccess('')
+                if (showCreateForm) {
+                  resetForm()
+                } else {
+                  setFormData(getDefaultForm(isRecruiterScopedRole ? recruiterClientId : (selectedClientId || '')))
+                  setCreateStep('setup')
+                  setSingleFile(null)
+                  setSingleFileError('')
+                  setSingleExtracted(null)
+                  setError('')
+                  setSuccess('')
+                  setShowCreateForm(true)
+                }
               }}
             >
               {showCreateForm ? 'Close' : '+ Add Candidate'}
@@ -901,151 +877,232 @@ export default function Candidates() {
         </div>
       </Card>
 
-      {/* Create form */}
+      {/* ── Add Single Candidate — 3-step flow ── */}
       {showCreateForm && (
         <Card>
-          {createStep === 'form' ? (
+          {/* Step indicator */}
+          <div className="flex items-center gap-2 mb-5">
+            {['Select JD', 'Upload Resume', 'Review & Add'].map((label, idx) => {
+              const stepKeys = ['setup', 'upload', 'preview']
+              const stepIdx = stepKeys.indexOf(createStep)
+              const done = idx < stepIdx
+              const active = idx === stepIdx
+              return (
+                <div key={label} className="flex items-center gap-2">
+                  <div className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full transition-colors ${
+                    active ? 'bg-[#02c0fa] text-white' :
+                    done ? 'bg-emerald-100 text-emerald-700' :
+                    'bg-slate-100 text-slate-400'
+                  }`}>
+                    {done ? (
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      <span>{idx + 1}</span>
+                    )}
+                    {label}
+                  </div>
+                  {idx < 2 && <div className={`h-px w-4 ${done ? 'bg-emerald-300' : 'bg-slate-200'}`} />}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* ── Step 1: Select JD ── */}
+          {createStep === 'setup' && (
             <>
-              <CardTitle>Create Candidate</CardTitle>
-              <form onSubmit={handleCreateCandidate}>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {!isRecruiterScopedRole && (
-                    <FormField label="Client" htmlFor="candidate_client_id">
-                      <SearchSelect
-                        inputId="candidate_client_id"
-                        options={clients.map((c) => ({ label: c.name, value: String(c.id) }))}
-                        value={formData.client_id}
-                        onChange={(val) => setFormData((previous) => ({ ...previous, client_id: val || '', jd_id: '' }))}
-                        placeholder="Select client"
-                      />
-                    </FormField>
-                  )}
-                  <FormField label="Job Description" htmlFor="candidate_jd_id">
+              <CardTitle>Add Candidate — Select Job Description</CardTitle>
+              <div className={`grid grid-cols-1 gap-4 mt-4 ${!isRecruiterScopedRole ? 'sm:grid-cols-2' : ''}`}>
+                {!isRecruiterScopedRole && (
+                  <FormField label="Client" htmlFor="single_client_id">
                     <SearchSelect
-                      inputId="candidate_jd_id"
-                      options={jdsForForm.map((jd) => ({ label: jd.title, value: String(jd.id) }))}
-                      value={formData.jd_id}
-                      onChange={(val) => setFormData((previous) => ({ ...previous, jd_id: val || '' }))}
-                      placeholder="Select JD"
-                      noOptionsMessage={isRecruiterScopedRole ? 'No JDs assigned to you. Contact your manager.' : 'No options'}
+                      inputId="single_client_id"
+                      options={clients.map((c) => ({ label: c.name, value: String(c.id) }))}
+                      value={formData.client_id}
+                      onChange={(val) => setFormData((p) => ({ ...p, client_id: val || '', jd_id: '' }))}
+                      placeholder="Select client"
                     />
                   </FormField>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <FormField label="Full Name" htmlFor="candidate_full_name">
-                    <FormInput
-                      id="candidate_full_name"
-                      type="text"
-                      value={formData.full_name}
-                      onChange={(event) => setFormData((previous) => ({ ...previous, full_name: event.target.value }))}
-                      required
-                      placeholder="John Doe"
-                    />
-                  </FormField>
-                  <FormField label="Email" htmlFor="candidate_email">
-                    <FormInput
-                      id="candidate_email"
-                      type="email"
-                      value={formData.email}
-                      onChange={(event) => setFormData((previous) => ({ ...previous, email: event.target.value }))}
-                      required
-                      placeholder="john@example.com"
-                    />
-                  </FormField>
-                </div>
-                <FormField label="Initial Status" htmlFor="candidate_status">
+                )}
+                <FormField label="Job Description" htmlFor="single_jd_id">
                   <SearchSelect
-                    inputId="candidate_status"
-                    options={CANDIDATE_STATUSES.map((s) => ({ label: s, value: s }))}
-                    value={formData.status}
-                    onChange={(val) => setFormData((previous) => ({ ...previous, status: val || 'APPLIED' }))}
-                    placeholder="Select status"
+                    inputId="single_jd_id"
+                    options={jdsForForm.map((jd) => ({ label: jd.title, value: String(jd.id) }))}
+                    value={formData.jd_id}
+                    onChange={(val) => setFormData((p) => ({ ...p, jd_id: val || '' }))}
+                    placeholder="Select JD"
+                    noOptionsMessage={isRecruiterScopedRole ? 'No JDs assigned to you.' : 'No options'}
                   />
                 </FormField>
-                <div className="flex gap-2 pt-1">
-                  <PrimaryBtn type="submit" loading={isSubmitting}>
-                    {isSubmitting ? 'Creating...' : 'Create Candidate'}
-                  </PrimaryBtn>
-                  <SecondaryBtn onClick={resetForm} disabled={isSubmitting}>Cancel</SecondaryBtn>
-                </div>
-              </form>
+              </div>
+              <div className="flex gap-2 mt-5">
+                <PrimaryBtn
+                  onClick={() => setCreateStep('upload')}
+                  disabled={!formData.jd_id || (!isRecruiterScopedRole && !formData.client_id)}
+                >
+                  Next — Upload Resume
+                </PrimaryBtn>
+                <SecondaryBtn onClick={resetForm}>Cancel</SecondaryBtn>
+              </div>
             </>
-          ) : (
+          )}
+
+          {/* ── Step 2: Upload Resume ── */}
+          {createStep === 'upload' && (
             <>
-              <CardTitle>Upload Resume</CardTitle>
-              <AlertBanner type="error" message={resumeError} />
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField label="Resume File" htmlFor="candidate_resume_file">
-                  <FormInput
-                    id="candidate_resume_file"
-                    type="file"
-                    accept=".pdf,.docx"
-                    onChange={handleResumeFileChange}
-                  />
-                </FormField>
-                <div className="flex items-end">
-                  <PrimaryBtn
-                    onClick={handleUploadAndExtractResume}
-                    loading={isResumeProcessing}
-                    disabled={!resumeFile || isResumeProcessing}
-                    className="w-full sm:w-auto"
-                  >
-                    {isResumeProcessing ? 'AI is reading resume...' : 'Upload & Extract'}
-                  </PrimaryBtn>
-                </div>
+              <div className="flex items-center justify-between mb-4">
+                <CardTitle>Upload Resume</CardTitle>
+                <button
+                  type="button"
+                  onClick={() => { setCreateStep('setup'); setSingleFile(null); setSingleFileError('') }}
+                  className="text-xs text-slate-500 hover:text-slate-700 font-medium"
+                >
+                  ← Back
+                </button>
               </div>
 
-              {isResumeProcessing && (
-                <div className="flex items-center gap-2.5 text-sm text-slate-600 mb-4">
-                  <span className="w-4 h-4 border-2 border-blue-200 border-t-blue-600 rounded-full spin" />
-                  AI is reading resume...
+              {/* JD context pill */}
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-700 font-medium mb-5">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                {jdsForForm.find((jd) => String(jd.id) === String(formData.jd_id))?.title || `JD #${formData.jd_id}`}
+              </div>
+
+              {/* Drag-and-drop zone */}
+              <div
+                className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${
+                  singleFile ? 'border-emerald-400 bg-emerald-50' : 'border-slate-300 hover:border-[#02c0fa] hover:bg-blue-50/40'
+                }`}
+                onClick={() => document.getElementById('single_resume_input').click()}
+                onDrop={(e) => { e.preventDefault(); handleSingleFileSelect(e.dataTransfer.files?.[0] || null) }}
+                onDragOver={(e) => e.preventDefault()}
+              >
+                <input
+                  id="single_resume_input"
+                  type="file"
+                  accept=".pdf,.docx"
+                  className="hidden"
+                  onChange={(e) => handleSingleFileSelect(e.target.files?.[0] || null)}
+                />
+                {singleFile ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center">
+                      <svg className="w-6 h-6 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <p className="text-sm font-semibold text-emerald-700">{singleFile.name}</p>
+                    <p className="text-xs text-slate-500">{(singleFile.size / 1024).toFixed(1)} KB · Click to change</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center">
+                      <svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                      </svg>
+                    </div>
+                    <p className="text-sm font-semibold text-slate-700">Click to select or drag & drop</p>
+                    <p className="text-xs text-slate-400">PDF or DOCX · max 2 MB</p>
+                  </div>
+                )}
+              </div>
+
+              {singleFileError && (
+                <p className="mt-2 text-sm text-red-600 font-medium">{singleFileError}</p>
+              )}
+
+              <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 mt-4 text-sm text-blue-700">
+                AI will extract the candidate's name, email, phone, and skills from the resume. You can review and edit before saving.
+              </div>
+
+              <div className="flex gap-2 mt-5">
+                <PrimaryBtn onClick={handleSingleExtract} loading={isSingleExtracting} disabled={!singleFile || isSingleExtracting}>
+                  {isSingleExtracting ? (
+                    <>
+                      <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      AI is reading resume…
+                    </>
+                  ) : 'Upload & Extract'}
+                </PrimaryBtn>
+                <SecondaryBtn onClick={resetForm} disabled={isSingleExtracting}>Cancel</SecondaryBtn>
+              </div>
+            </>
+          )}
+
+          {/* ── Step 3: Review & Create ── */}
+          {createStep === 'preview' && singleExtracted && (
+            <>
+              <div className="flex items-center justify-between mb-4">
+                <CardTitle>Review Extracted Details</CardTitle>
+                <button
+                  type="button"
+                  onClick={() => { setCreateStep('upload'); setSingleExtracted(null) }}
+                  className="text-xs text-slate-500 hover:text-slate-700 font-medium"
+                >
+                  ← Back
+                </button>
+              </div>
+
+              <p className="text-sm text-slate-500 mb-5">
+                These details were extracted by AI from <span className="font-semibold text-slate-700">{singleFile?.name}</span>. Edit anything before creating the candidate.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <FormField label="Full Name" htmlFor="preview_full_name">
+                  <FormInput
+                    id="preview_full_name"
+                    type="text"
+                    value={singleExtracted.full_name}
+                    onChange={(e) => setSingleExtracted((p) => ({ ...p, full_name: e.target.value }))}
+                    placeholder="John Doe"
+                  />
+                </FormField>
+                <FormField label="Email" htmlFor="preview_email">
+                  <FormInput
+                    id="preview_email"
+                    type="email"
+                    value={singleExtracted.email}
+                    onChange={(e) => setSingleExtracted((p) => ({ ...p, email: e.target.value }))}
+                    placeholder="john@example.com"
+                  />
+                </FormField>
+                <FormField label="Phone" htmlFor="preview_phone">
+                  <FormInput
+                    id="preview_phone"
+                    type="text"
+                    value={singleExtracted.phone}
+                    onChange={(e) => setSingleExtracted((p) => ({ ...p, phone: e.target.value }))}
+                    placeholder="+91 98765 43210"
+                  />
+                </FormField>
+              </div>
+
+              {singleExtracted.skills.length > 0 && (
+                <div className="mt-2">
+                  <p className="text-sm font-medium text-slate-700 mb-2">Extracted Skills</p>
+                  <div className="flex flex-wrap gap-2">
+                    {singleExtracted.skills.map((skill, i) => (
+                      <Badge key={i} variant="blue">{skill}</Badge>
+                    ))}
+                  </div>
                 </div>
               )}
 
-              {showExtractedEditor && (
-                <>
-                  <p className="text-xs text-slate-500 mb-3">These details were extracted by AI. Please verify before saving.</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <FormField label="Full Name" htmlFor="candidate_extracted_full_name">
-                      <FormInput
-                        id="candidate_extracted_full_name"
-                        type="text"
-                        value={extractedForm.full_name}
-                        onChange={(event) => setExtractedForm((previous) => ({ ...previous, full_name: event.target.value }))}
-                        placeholder="John Doe"
-                      />
-                    </FormField>
-                    <FormField label="Email" htmlFor="candidate_extracted_email">
-                      <FormInput
-                        id="candidate_extracted_email"
-                        type="email"
-                        value={extractedForm.email}
-                        onChange={(event) => setExtractedForm((previous) => ({ ...previous, email: event.target.value }))}
-                        placeholder="john@example.com"
-                      />
-                    </FormField>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <FormField label="Phone" htmlFor="candidate_extracted_phone">
-                      <FormInput
-                        id="candidate_extracted_phone"
-                        type="text"
-                        value={extractedForm.phone}
-                        onChange={(event) => setExtractedForm((previous) => ({ ...previous, phone: event.target.value }))}
-                        placeholder="+1 234 567 890"
-                      />
-                    </FormField>
-                  </div>
-                </>
+              {singleFileError && (
+                <p className="mt-3 text-sm text-red-600 font-medium">{singleFileError}</p>
               )}
 
-              <div className="flex gap-2 pt-1">
-                {showExtractedEditor ? (
-                  <PrimaryBtn onClick={handleConfirmExtractedDetails} loading={isSubmitting}>
-                    {isSubmitting ? 'Saving...' : 'Confirm'}
-                  </PrimaryBtn>
-                ) : null}
-                <SecondaryBtn onClick={handleSkipResumeUpload} disabled={isResumeProcessing || isSubmitting}>Skip</SecondaryBtn>
+              <div className="flex gap-2 mt-5">
+                <PrimaryBtn
+                  onClick={handleSingleCreate}
+                  loading={isSingleCreating}
+                  disabled={!singleExtracted.full_name.trim() || !singleExtracted.email.trim() || isSingleCreating}
+                >
+                  {isSingleCreating ? 'Creating…' : 'Create Candidate'}
+                </PrimaryBtn>
+                <SecondaryBtn onClick={resetForm} disabled={isSingleCreating}>Cancel</SecondaryBtn>
               </div>
             </>
           )}
@@ -1397,12 +1454,22 @@ export default function Candidates() {
           {candidates.length === 0 && !isLoading ? (
             <tr><td colSpan={isRecruiterScopedRole ? 8 : 9}><EmptyState message="No candidates found" /></td></tr>
           ) : (
-            candidates.map((candidate) => (
+            candidates.map((candidate) => {
+              const ivState = getInterviewState(candidate.id)
+              const totalInterviews = (interviewMap[candidate.id] || []).length
+              const rejectedDaysLeft = ivState.tag === 'rejected'
+                ? getCandidateLockDaysLeft(candidate, ivState.interview, currentTimeMs)
+                : null
+              return (
               <TableRow key={candidate.id}>
                 <TableCell>
-                  <div>
+                  <div className="space-y-1">
                     <div className="font-medium text-slate-900">{candidate.full_name}</div>
-                    <Badge variant="gray">{interviewCounts[candidate.id] || 0} interviews</Badge>
+                    {totalInterviews > 0 && (
+                      <span className="text-[11px] text-slate-400 font-medium">
+                        {totalInterviews} interview{totalInterviews !== 1 ? 's' : ''}
+                      </span>
+                    )}
                   </div>
                 </TableCell>
                 <TableCell className="text-slate-500">{candidate.email}</TableCell>
@@ -1427,40 +1494,137 @@ export default function Candidates() {
                 <TableCell className="max-w-[220px]">
                   <div className="text-slate-600 whitespace-normal break-words leading-snug">{jdMap.get(candidate.jd_id)?.title || `JD #${candidate.jd_id}`}</div>
                 </TableCell>
+
+                {/* ── Status column: candidate status + interview status ── */}
                 <TableCell>
-                  {!isPanelist ? (
-                    <select
-                      value={candidate.status}
-                      onChange={(event) => handleStatusChange(candidate.id, event.target.value)}
-                      className={`text-xs border rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium transition-colors cursor-pointer ${
-                        STATUS_VARIANTS[candidate.status] === 'green' ? 'border-green-200 text-green-700' :
-                        STATUS_VARIANTS[candidate.status] === 'red' ? 'border-red-200 text-red-700' :
-                        STATUS_VARIANTS[candidate.status] === 'amber' ? 'border-amber-200 text-amber-700' :
-                        STATUS_VARIANTS[candidate.status] === 'blue' ? 'border-blue-200 text-blue-700' :
+                  <div className="space-y-1.5">
+                    {/* Candidate status badge/dropdown */}
+                    {(() => {
+                      const displayStatus = ivState.tag === 'active' ? 'SCHEDULED' : candidate.status
+                      const variant = STATUS_VARIANTS[displayStatus]
+                      const colorClass =
+                        variant === 'green' ? 'border-green-200 text-green-700 bg-green-50' :
+                        variant === 'red' ? 'border-red-200 text-red-700 bg-red-50' :
+                        variant === 'amber' ? 'border-amber-200 text-amber-700 bg-amber-50' :
+                        variant === 'blue' ? 'border-blue-200 text-blue-700 bg-blue-50' :
                         'border-slate-200 text-slate-700'
-                      }`}
-                    >
-                      {CANDIDATE_STATUSES.map((status) => (
-                        <option key={status} value={status}>{status}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <Badge variant={STATUS_VARIANTS[candidate.status] || 'gray'}>{candidate.status}</Badge>
-                  )}
+                      return !isPanelist ? (
+                        <select
+                          value={displayStatus}
+                          onChange={(event) => {
+                            // SCHEDULED is a derived display value — ignore if re-selected
+                            if (event.target.value !== 'SCHEDULED') {
+                              handleStatusChange(candidate.id, event.target.value)
+                            }
+                          }}
+                          className={`text-xs border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500 font-semibold transition-colors cursor-pointer ${colorClass}`}
+                        >
+                          {ivState.tag === 'active' && (
+                            <option value="SCHEDULED" disabled>SCHEDULED</option>
+                          )}
+                          {CANDIDATE_STATUSES.map((s) => (
+                            <option key={s} value={s}>{s}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <Badge variant={variant || 'gray'}>{displayStatus}</Badge>
+                      )
+                    })()}
+
+                    {/* Interview status indicator */}
+                    {ivState.tag === 'absent' && (
+                      <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-[11px] font-semibold text-amber-700 whitespace-nowrap">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Absent / No-Show
+                      </div>
+                    )}
+                    {ivState.tag === 'selected' && (
+                      <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-[11px] font-semibold text-emerald-700 whitespace-nowrap">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        Attended · Selected
+                      </div>
+                    )}
+                    {ivState.tag === 'rejected' && (
+                      <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-50 border border-red-200 text-[11px] font-semibold text-red-700 whitespace-nowrap">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                        Attended · Not Selected
+                      </div>
+                    )}
+                  </div>
                 </TableCell>
+
                 <TableCell className="text-slate-500 whitespace-nowrap">
                   {formatDateTimeInIST(candidate.resume_uploaded_at)}
                 </TableCell>
+
+                {/* ── Actions column ── */}
                 <TableCell>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     {!isPanelist && (
-                      <button
-                        type="button"
-                        onClick={() => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}`)}
-                        className="text-xs bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
-                      >
-                        Schedule Interview
-                      </button>
+                      <>
+                        {/* Schedule / Reschedule / View / Locked — based on interview state */}
+                        {ivState.tag === 'none' && (
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}`)}
+                            className="inline-flex items-center gap-1.5 text-xs bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                            Schedule
+                          </button>
+                        )}
+
+                        {ivState.tag === 'active' && (
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}`)}
+                            className="inline-flex items-center gap-1.5 text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                            </svg>
+                            View Interview
+                          </button>
+                        )}
+
+                        {ivState.tag === 'absent' && (
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}`)}
+                            className="inline-flex items-center gap-1.5 text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-2.5 py-1.5 rounded-lg font-semibold transition-colors whitespace-nowrap"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Reschedule
+                          </button>
+                        )}
+
+                        {ivState.tag === 'selected' && (
+                          <span className="inline-flex items-center gap-1.5 text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1.5 rounded-lg font-semibold whitespace-nowrap">
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            Selected
+                          </span>
+                        )}
+
+                        {ivState.tag === 'rejected' && (
+                          <RescheduleCountdownBadge
+                            daysLeft={rejectedDaysLeft}
+                            onClick={rejectedDaysLeft === 0 ? () => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}`) : undefined}
+                          />
+                        )}
+                      </>
                     )}
                     {candidate.candidate_extracted_skills && candidate.candidate_extracted_skills.length > 0 && (
                       <button
@@ -1505,7 +1669,8 @@ export default function Candidates() {
                   </div>
                 </TableCell>
               </TableRow>
-            ))
+              )
+            })
           )}
         </DataTable>
       </Card>

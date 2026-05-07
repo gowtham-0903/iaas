@@ -33,6 +33,7 @@ ALLOWED_ROLES = {
     UserRole.M_RECRUITER.value,
     UserRole.QC.value,
     UserRole.ADMIN.value,
+    UserRole.OPERATOR.value,
 }
 
 RESUME_ALLOWED_ROLES = {
@@ -40,6 +41,7 @@ RESUME_ALLOWED_ROLES = {
     UserRole.SR_RECRUITER.value,
     UserRole.M_RECRUITER.value,
     UserRole.ADMIN.value,
+    UserRole.OPERATOR.value,
 }
 
 RESUME_UPLOAD_SUBDIR = os.path.join("uploads", "resumes")
@@ -69,6 +71,11 @@ def _can_access_client(role: str, user: Optional[User], client_id: int) -> bool:
     # RECRUITER, SR_RECRUITER, M_RECRUITER: can only access their own client
     if role in {UserRole.RECRUITER.value, UserRole.SR_RECRUITER.value, UserRole.M_RECRUITER.value}:
         return user is not None and user.client_id == client_id
+
+    if role == UserRole.OPERATOR.value and user is not None:
+        return OperatorClientAssignment.query.filter_by(
+            operator_id=user.id, client_id=client_id
+        ).first() is not None
 
     return False
 
@@ -167,20 +174,20 @@ def _check_cooling_period(email: str, jd_id: int):
         Blocked if a NOT_SELECTED candidate with this email+jd_id 
         exists with status_updated_at within the last 30 days.
     """
-    cutoff = _utc_now_naive() - timedelta(days=30)
-    
+    cutoff = _utc_now_naive() - timedelta(days=60)
+
     candidate = Candidate.query.filter(
         db.func.lower(Candidate.email) == email.lower().strip(),
         Candidate.jd_id == jd_id,
         Candidate.status == 'NOT_SELECTED',
         Candidate.status_updated_at >= cutoff,
     ).first()
-    
+
     if candidate is None:
         return False, None
-    
+
     unblock_date = (
-        candidate.status_updated_at + timedelta(days=30)
+        candidate.status_updated_at + timedelta(days=60)
     ).strftime('%Y-%m-%d')
     return True, unblock_date
 
@@ -245,6 +252,18 @@ def list_candidates():
         if user.client_id is None:
             return jsonify({"candidates": []}), 200
         query = query.filter(Candidate.client_id == user.client_id)
+
+    # OPERATOR: only see candidates from their mapped clients
+    if role == UserRole.OPERATOR.value:
+        op_client_ids = [
+            row.client_id
+            for row in OperatorClientAssignment.query.filter_by(operator_id=user.id)
+            .with_entities(OperatorClientAssignment.client_id)
+            .all()
+        ]
+        if not op_client_ids:
+            return jsonify({"candidates": []}), 200
+        query = query.filter(Candidate.client_id.in_(op_client_ids))
 
     if client_id is not None:
         if not _can_access_client(role, user, client_id):
@@ -334,7 +353,7 @@ def create_candidate():
     if role in {UserRole.RECRUITER.value, UserRole.SR_RECRUITER.value, UserRole.M_RECRUITER.value, UserRole.ADMIN.value}:
         is_blocked, unblock_date = _check_cooling_period(email, jd_id)
         if is_blocked:
-            return jsonify({"error": f"Candidate was not selected for this JD. Re-apply allowed after {unblock_date}."}), 409
+            return jsonify({"error": f"Candidate was not selected for this JD. Re-apply allowed after {unblock_date} (60-day cooling period)."}), 409
 
     # Explicit duplicate check before insert
     existing = Candidate.query.filter(
@@ -579,7 +598,7 @@ def bulk_upload_resumes():
             is_blocked, unblock_date = _check_cooling_period(extracted_email, jd_id)
             if is_blocked:
                 result["status"] = "rejected"
-                result["error"] = f"Candidate was not selected for this JD within the last 30 days. Re-apply allowed after {unblock_date}."
+                result["error"] = f"Candidate was not selected for this JD within the last 60 days. Re-apply allowed after {unblock_date}."
                 result["extracted"] = {
                     "full_name": extracted_full_name,
                     "email": extracted_email,

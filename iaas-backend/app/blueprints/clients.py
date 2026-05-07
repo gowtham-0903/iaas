@@ -10,6 +10,7 @@ from app.extensions import db
 from app.models.candidate import Candidate
 from app.models.client import Client
 from app.models.job_description import JobDescription
+from app.models.operator_client_assignment import OperatorClientAssignment
 from app.models.user import User, UserRole
 from app.schemas.client_schema import client_schema, clients_schema
 
@@ -30,6 +31,11 @@ def _can_access_client(role: Optional[str], user: Optional[User], client: Client
 
     if role == UserRole.RECRUITER.value and user is not None:
         return user.client_id == client.id
+
+    if role == UserRole.OPERATOR.value and user is not None:
+        return OperatorClientAssignment.query.filter_by(
+            operator_id=user.id, client_id=client.id
+        ).first() is not None
 
     return False
 
@@ -137,6 +143,18 @@ def list_clients():
 
     if role in {UserRole.ADMIN.value, UserRole.M_RECRUITER.value, UserRole.PANELIST.value}:
         clients = Client.query.order_by(Client.name.asc()).all()
+        return jsonify({"clients": _enrich_clients_with_metrics(clients)}), 200
+
+    if role == UserRole.OPERATOR.value:
+        op_client_ids = [
+            row.client_id
+            for row in OperatorClientAssignment.query.filter_by(operator_id=user.id)
+            .with_entities(OperatorClientAssignment.client_id)
+            .all()
+        ]
+        if not op_client_ids:
+            return jsonify({"clients": []}), 200
+        clients = Client.query.filter(Client.id.in_(op_client_ids)).order_by(Client.name.asc()).all()
         return jsonify({"clients": _enrich_clients_with_metrics(clients)}), 200
 
     if role == UserRole.RECRUITER.value:

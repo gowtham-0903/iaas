@@ -299,6 +299,9 @@ export default function Sidebar({ logoSubtitle = 'Admin Panel' }) {
     if (item.to === '/panelist-assignments') {
       return ['ADMIN', 'OPERATOR'].includes(user?.role)
     }
+    if (item.to === '/interviews') {
+      return user?.role === 'ADMIN'
+    }
     return true
   }
 

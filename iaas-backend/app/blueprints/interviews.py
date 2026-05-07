@@ -26,15 +26,13 @@ from app.services.teams_service import cancel_teams_interview_event, create_team
 interviews_bp = Blueprint("interviews", __name__)
 
 SCHEDULING_ALLOWED_ROLES = {
-    UserRole.OPERATOR.value,
     UserRole.ADMIN.value,
-    UserRole.M_RECRUITER.value,
-    UserRole.SR_RECRUITER.value,
+    UserRole.OPERATOR.value,
 }
 
 LIST_ALLOWED_ROLES = {
-    UserRole.OPERATOR.value,
     UserRole.ADMIN.value,
+    UserRole.OPERATOR.value,
     UserRole.M_RECRUITER.value,
     UserRole.SR_RECRUITER.value,
     UserRole.RECRUITER.value,
@@ -42,10 +40,8 @@ LIST_ALLOWED_ROLES = {
 }
 
 STATUS_UPDATE_ROLES = {
-    UserRole.OPERATOR.value,
     UserRole.ADMIN.value,
-    UserRole.M_RECRUITER.value,
-    UserRole.SR_RECRUITER.value,
+    UserRole.OPERATOR.value,
 }
 
 AVAILABILITY_WRITE_ROLES = {
@@ -58,7 +54,10 @@ VALID_INTERVIEW_STATUS = {
     "IN_PROGRESS",
     "COMPLETED",
     "CANCELLED",
+    "ABSENT",
 }
+
+VALID_OUTCOMES = {"SELECTED", "NOT_SELECTED"}
 
 VALID_MODES = {"virtual"}
 VALID_TIMEZONES = {
@@ -158,8 +157,18 @@ def _convert_utc_to_local(utc_dt: Optional[datetime], tz_str: str) -> Optional[s
 
 
 def _candidate_accessible_for_user(role: str, user: User, candidate: Candidate) -> bool:
-    if role in {UserRole.ADMIN.value, UserRole.OPERATOR.value}:
+    if role == UserRole.ADMIN.value:
         return True
+
+    if role == UserRole.OPERATOR.value:
+        row = db.session.execute(
+            sa.text(
+                "SELECT 1 FROM operator_client_assignments "
+                "WHERE operator_id = :op_id AND client_id = :client_id LIMIT 1"
+            ),
+            {"op_id": user.id, "client_id": candidate.client_id},
+        ).first()
+        return row is not None
 
     if role in {UserRole.M_RECRUITER.value, UserRole.SR_RECRUITER.value, UserRole.RECRUITER.value}:
         return user.client_id is not None and user.client_id == candidate.client_id
@@ -218,6 +227,7 @@ def _serialize_interview_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                 "teams_meeting_id": row.get("teams_meeting_id"),
                 "notes": row["notes"],
                 "status": row["status"],
+                "outcome": row.get("outcome"),
                 "panelists": panelists_by_interview.get(row["id"], []),
             }
         )
@@ -241,7 +251,8 @@ def _base_interview_query_sql() -> str:
             s.external_event_id,
             s.teams_meeting_id,
             s.notes,
-            s.status
+            s.status,
+            s.outcome
         FROM interview_schedules s
         JOIN candidates c ON c.id = s.candidate_id
         JOIN job_descriptions j ON j.id = s.jd_id
@@ -291,8 +302,15 @@ def _build_interview_filters(role: str, user: User, include_interview_id: Option
         filters.append("DATE(s.scheduled_at) <= :date_to")
         params["date_to"] = parsed_to
 
-    if role in {UserRole.ADMIN.value, UserRole.OPERATOR.value}:
+    if role == UserRole.ADMIN.value:
         pass
+    elif role == UserRole.OPERATOR.value:
+        filters.append(
+            "c.client_id IN ("
+            "  SELECT client_id FROM operator_client_assignments WHERE operator_id = :op_id"
+            ")"
+        )
+        params["op_id"] = user.id
     elif role == UserRole.PANELIST.value:
         filters.append(
             "EXISTS (SELECT 1 FROM panel_assignments pa_f WHERE pa_f.interview_id = s.id AND pa_f.panelist_id = :panelist_id)"
@@ -409,6 +427,18 @@ def create_interview():
 
     if candidate.jd_id != jd.id:
         return jsonify({"errors": {"jd_id": ["Candidate does not belong to this JD"]}}), 400
+
+    # Block if candidate already has an active interview for this JD
+    active_check = db.session.execute(
+        sa.text(
+            "SELECT id FROM interview_schedules "
+            "WHERE candidate_id = :candidate_id AND jd_id = :jd_id "
+            "AND status IN ('SCHEDULED', 'IN_PROGRESS') LIMIT 1"
+        ),
+        {"candidate_id": candidate_id, "jd_id": jd_id},
+    ).first()
+    if active_check:
+        return jsonify({"error": "Candidate already has an active interview scheduled for this JD."}), 409
 
     # Fetch JD skills for the candidate invitation email
     raw_skills = JDSkill.query.filter_by(jd_id=jd_id).all()
@@ -634,25 +664,62 @@ def update_interview_status(interview_id: int):
     if normalized_status not in VALID_INTERVIEW_STATUS:
         return jsonify({"errors": {"status": ["Invalid status"]}}), 400
 
-    update_stmt = sa.text(
-        "UPDATE interview_schedules SET status = :status WHERE id = :interview_id"
-    )
-    result = db.session.execute(update_stmt, {"status": normalized_status, "interview_id": interview_id})
-    if result.rowcount == 0:
-        db.session.rollback()
+    outcome = None
+    if normalized_status == "COMPLETED":
+        raw_outcome = payload.get("outcome")
+        if not isinstance(raw_outcome, str) or raw_outcome.strip().upper() not in VALID_OUTCOMES:
+            return jsonify({"errors": {"outcome": ["outcome is required when marking COMPLETED — must be SELECTED or NOT_SELECTED"]}}), 400
+        outcome = raw_outcome.strip().upper()
+
+    # Fetch current interview row
+    interview_row = db.session.execute(
+        sa.text(
+            "SELECT id, candidate_id, scheduled_at FROM interview_schedules WHERE id = :interview_id"
+        ),
+        {"interview_id": interview_id},
+    ).mappings().first()
+    if interview_row is None:
         return jsonify({"error": "Interview not found"}), 404
+
+    # Update interview status (and outcome if completing)
+    db.session.execute(
+        sa.text(
+            "UPDATE interview_schedules SET status = :status, outcome = :outcome WHERE id = :interview_id"
+        ),
+        {"status": normalized_status, "outcome": outcome, "interview_id": interview_id},
+    )
+
+    # Auto-update candidate status based on outcome
+    candidate_id = interview_row["candidate_id"]
+    if normalized_status == "COMPLETED" and outcome == "SELECTED":
+        db.session.execute(
+            sa.text(
+                "UPDATE candidates SET status = 'SELECTED', status_updated_at = :now WHERE id = :candidate_id"
+            ),
+            {"now": datetime.now(timezone.utc).replace(tzinfo=None), "candidate_id": candidate_id},
+        )
+    elif normalized_status == "COMPLETED" and outcome == "NOT_SELECTED":
+        # Use interview's scheduled_at as the anchor for the 60-day cooling period
+        db.session.execute(
+            sa.text(
+                "UPDATE candidates SET status = 'NOT_SELECTED', status_updated_at = :interview_date WHERE id = :candidate_id"
+            ),
+            {"interview_date": interview_row["scheduled_at"], "candidate_id": candidate_id},
+        )
+    elif normalized_status == "ABSENT":
+        # Mark candidate as INTERVIEWED so they stay in the pipeline
+        db.session.execute(
+            sa.text(
+                "UPDATE candidates SET status = 'INTERVIEWED' WHERE id = :candidate_id AND status NOT IN ('SELECTED', 'NOT_SELECTED')"
+            ),
+            {"candidate_id": candidate_id},
+        )
 
     db.session.commit()
 
     if normalized_status == "CANCELLED":
         event_row = db.session.execute(
-            sa.text(
-                """
-                SELECT external_event_id
-                FROM interview_schedules
-                WHERE id = :interview_id
-                """
-            ),
+            sa.text("SELECT external_event_id FROM interview_schedules WHERE id = :interview_id"),
             {"interview_id": interview_id},
         ).mappings().first()
         if event_row and event_row["external_event_id"]:

@@ -14,6 +14,7 @@ from app.models.client import Client
 from app.models.jd_recruiter_assignment import JDRecruiterAssignment
 from app.models.jd_skill import JDSkill
 from app.models.job_description import JobDescription
+from app.models.operator_client_assignment import OperatorClientAssignment
 from app.models.user import User, UserRole
 from app.services.file_parser import extract_text_from_docx, extract_text_from_pdf
 from app.services.skill_extractor import extract_skills_from_text
@@ -39,6 +40,7 @@ ALLOWED_RECRUITER_AND_ABOVE = {
     UserRole.QC.value,
     UserRole.ADMIN.value,
     UserRole.PANELIST.value,
+    UserRole.OPERATOR.value,
 }
 
 JD_CREATE_ROLES = {
@@ -99,6 +101,13 @@ def _get_accessible_jd(jd_id):
         if current_user.client_id != jd.client_id:
             return None, (jsonify({"message": "Forbidden"}), 403)
         if not _is_jd_assigned_to_recruiter(jd.id, current_user.id):
+            return None, (jsonify({"message": "Forbidden"}), 403)
+
+    if role == UserRole.OPERATOR.value:
+        assigned = OperatorClientAssignment.query.filter_by(
+            operator_id=current_user.id, client_id=jd.client_id
+        ).first()
+        if assigned is None:
             return None, (jsonify({"message": "Forbidden"}), 403)
 
     return jd, None
@@ -179,6 +188,16 @@ def list_jds():
         if not assigned_jd_ids:
             return jsonify({"jds": []}), 200
         query = query.filter(JobDescription.id.in_(assigned_jd_ids))
+    elif role == UserRole.OPERATOR.value:
+        op_client_ids = [
+            row.client_id
+            for row in OperatorClientAssignment.query.filter_by(operator_id=current_user.id)
+            .with_entities(OperatorClientAssignment.client_id)
+            .all()
+        ]
+        if not op_client_ids:
+            return jsonify({"jds": []}), 200
+        query = query.filter(JobDescription.client_id.in_(op_client_ids))
     elif role in {UserRole.ADMIN.value, UserRole.SR_RECRUITER.value, UserRole.M_RECRUITER.value, UserRole.QC.value}:
         pass
     else:

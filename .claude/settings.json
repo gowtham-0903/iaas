@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(FLASK_DEBUG=1 /Users/gowtham/Adroit/Projects/iaas/.venv/bin/pytest tests/test_interviews.py::test_schedule_interview_success -v --tb=long --log-cli-level=ERROR -s)",
+      "Bash(/Users/gowtham/Adroit/Projects/iaas/.venv/bin/pytest tests/ --tb=line)",
+      "Bash(/Users/gowtham/Adroit/Projects/iaas/.venv/bin/pytest tests/test_interviews.py::test_schedule_interview_success tests/test_interviews.py::test_create_panelist_availability tests/test_job_descriptions.py::test_create_jd_recruiter_forbidden tests/test_scoring.py::test_submit_scores_panelist tests/test_qc.py::test_qc_reports_as_qc -v --tb=short)",
+      "Bash(/Users/gowtham/Adroit/Projects/iaas/.venv/bin/python -c ' *)",
+      "Bash(/Users/gowtham/Adroit/Projects/iaas/.venv/bin/pytest tests/test_scoring.py::test_submit_scores_panelist tests/test_interviews.py::test_create_panelist_availability -v --tb=short)",
+      "Bash(/Users/gowtham/Adroit/Projects/iaas/.venv/bin/pytest tests/test_scoring.py::test_get_scores_after_submit -v --tb=short)",
+      "Bash(/Users/gowtham/Adroit/Projects/iaas/.venv/bin/pytest tests/test_scoring.py::test_submit_scores_panelist tests/test_qc.py::test_qc_review_returns_interview_data -v --tb=short)",
+      "Bash(/Users/gowtham/Adroit/Projects/iaas/.venv/bin/pytest tests/test_qc.py::test_qc_review_returns_interview_data -v --tb=short)",
+      "Bash(git commit -m ' *)",
+      "Bash(rm -rf node_modules package-lock.json)",
+      "Bash(npm install *)",
+      "Bash(sudo chown -R 501:20 \"/Users/gowtham/.npm\")",
+      "Bash(git push *)",
+      "Bash(npm test *)",
+      "Bash(git -C /Users/gowtham/Adroit/Projects/iaas status --short iaas-backend/migrations/)",
+      "Bash(git -C /Users/gowtham/Adroit/Projects/iaas log --oneline -20)",
+      "Bash(git -C /Users/gowtham/Adroit/Projects/iaas log --oneline -- iaas-backend/migrations/versions/m4n5o6p7q8r9_create_operator_client_assignments.py iaas-backend/migrations/versions/n5o6p7q8r9s0_add_unique_email_jd_to_candidates.py iaas-backend/migrations/versions/f6a7b8c9d0e1_add_feedback_validations_table.py iaas-backend/migrations/versions/e5f6g7h8i9j0_enforce_recruiter_client_integrity.py)",
+      "Bash(git -C /Users/gowtham/Adroit/Projects/iaas pull origin main --rebase)",
+      "Bash(git -C /Users/gowtham/Adroit/Projects/iaas branch -a)",
+      "Bash(git -C /Users/gowtham/Adroit/Projects/iaas checkout development)",
+      "Bash(git -C /Users/gowtham/Adroit/Projects/iaas merge main --ff-only)",
+      "Bash(git add *)"
+    ]
+  }
+}
