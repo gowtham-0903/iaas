@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 from datetime import date, datetime, time, timezone
 from typing import Any, Dict, List, Optional
 
@@ -7,6 +9,8 @@ import pytz
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 import sqlalchemy as sa
+
+logger = logging.getLogger(__name__)
 
 from app.extensions import db, limiter
 from app.models.candidate import Candidate
@@ -524,9 +528,10 @@ def create_interview():
             )
 
         db.session.commit()
-    except Exception:
+    except Exception as exc:
         db.session.rollback()
-        return jsonify({"error": "Failed to create interview"}), 500
+        logger.exception("Failed to create interview")
+        return jsonify({"error": "Failed to create interview", "detail": str(exc)}), 500
 
     try:
         seen_extra: set = set()
