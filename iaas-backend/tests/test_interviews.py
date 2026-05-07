@@ -146,7 +146,7 @@ def test_update_interview_status_to_completed(app, client, admin_user, sample_in
     headers = auth_headers(app, admin_user)
     resp = client.put(
         f"/api/interviews/{sample_interview.id}/status",
-        json={"status": "COMPLETED"},
+        json={"status": "COMPLETED", "outcome": "SELECTED"},
         headers=headers,
     )
     assert resp.status_code == 200
@@ -187,7 +187,7 @@ def test_update_interview_status_recruiter_forbidden(app, client, recruiter_user
 
 def test_update_interview_status_not_found(app, client, admin_user):
     headers = auth_headers(app, admin_user)
-    resp = client.put("/api/interviews/99999/status", json={"status": "COMPLETED"}, headers=headers)
+    resp = client.put("/api/interviews/99999/status", json={"status": "COMPLETED", "outcome": "SELECTED"}, headers=headers)
     assert resp.status_code == 404
 
 
