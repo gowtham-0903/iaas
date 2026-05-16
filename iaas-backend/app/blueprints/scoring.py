@@ -11,8 +11,9 @@ from werkzeug.utils import secure_filename
 from app.extensions import db
 from app.models.interview_scoring import InterviewScore
 from app.models.user import User, UserRole
-from app.services.ai_scorer import generate_interview_score
+from app.services.ai_scorer import generate_interview_score, generate_ai_score
 from app.services.file_parser import extract_text_from_docx
+from app.services import teams_service
 
 
 scoring_bp = Blueprint("scoring", __name__)
@@ -26,9 +27,21 @@ SCORE_VIEW_ROLES = {
     UserRole.SR_RECRUITER.value,
 }
 TRANSCRIPT_ROLES = {UserRole.PANELIST.value, UserRole.ADMIN.value}
+FETCH_TRANSCRIPT_ROLES = {
+    UserRole.ADMIN.value,
+    UserRole.M_RECRUITER.value,
+    UserRole.SR_RECRUITER.value,
+    UserRole.OPERATOR.value,
+}
+GENERATE_SCORE_ROLES = {
+    UserRole.ADMIN.value,
+    UserRole.M_RECRUITER.value,
+    UserRole.SR_RECRUITER.value,
+    UserRole.QC.value,
+}
 
 MAX_TRANSCRIPT_BYTES = 5 * 1024 * 1024
-ALLOWED_TRANSCRIPT_EXTENSIONS = {".docx", ".txt"}
+ALLOWED_TRANSCRIPT_EXTENSIONS = {".docx", ".txt", ".vtt"}
 TRANSCRIPT_UPLOAD_SUBDIR = os.path.join("uploads", "transcripts")
 
 
@@ -225,11 +238,11 @@ def submit_scores(interview_id: int):
     saved_rows = db.session.execute(
         sa.text(
             """
-            SELECT s.id, s.panelist_id, u.full_name AS panelist_name, s.skill_id, j.skill_name,
+            SELECT s.id, s.panelist_id, p.name AS panelist_name, s.skill_id, j.skill_name,
                    s.technical_score, s.communication_score, s.problem_solving_score,
                    s.comments, s.submitted_at
             FROM interview_scores s
-            JOIN users u ON u.id = s.panelist_id
+            JOIN panelists p ON p.id = s.panelist_id
             JOIN jd_skills j ON j.id = s.skill_id
             WHERE s.interview_id = :interview_id
               AND s.panelist_id = :panelist_id
@@ -264,11 +277,11 @@ def get_scores(interview_id: int):
         return jsonify({"error": "Interview not found"}), 404
 
     base_sql = """
-        SELECT s.id, s.panelist_id, u.full_name AS panelist_name, s.skill_id, j.skill_name,
+        SELECT s.id, s.panelist_id, p.name AS panelist_name, s.skill_id, j.skill_name,
                s.technical_score, s.communication_score, s.problem_solving_score,
                s.comments, s.submitted_at
         FROM interview_scores s
-        JOIN users u ON u.id = s.panelist_id
+        JOIN panelists p ON p.id = s.panelist_id
         JOIN jd_skills j ON j.id = s.skill_id
         WHERE s.interview_id = :interview_id
     """
@@ -329,7 +342,7 @@ def upload_transcript(interview_id: int):
 
             if ext == ".docx":
                 transcript_text = extract_text_from_docx(file_bytes)
-            else:
+            else:  # .txt or .vtt
                 transcript_text = file_bytes.decode("utf-8", errors="ignore").strip()
 
             file_url = relative_path
@@ -421,3 +434,378 @@ def upload_transcript(interview_id: int):
     }
 
     return jsonify({"transcript": transcript_payload, "ai_score": ai_result}), 200
+
+
+@scoring_bp.post("/interviews/<int:interview_id>/fetch-transcript")
+@jwt_required()
+def fetch_transcript(interview_id: int):
+    """Fetch the latest Teams meeting transcript for a completed/in-progress interview.
+
+    Auth: ADMIN, M_RECRUITER, SR_RECRUITER, OPERATOR
+    - 400 if interview not found, status invalid, or no teams_meeting_id.
+    - 202 if transcript not yet available (Teams takes 5-10 min post-meeting).
+    - 200 with { data: { transcript_id, source, preview } } on success.
+    """
+    role = get_jwt().get("role")
+    if role not in FETCH_TRANSCRIPT_ROLES:
+        return jsonify({"message": "Forbidden"}), 403
+
+    # --- Validate interview exists and has acceptable status ---------------
+    interview_row = db.session.execute(
+        sa.text(
+            """
+            SELECT s.id, s.status, s.teams_meeting_id, s.jd_id
+            FROM interview_schedules s
+            WHERE s.id = :interview_id
+            LIMIT 1
+            """
+        ),
+        {"interview_id": interview_id},
+    ).mappings().first()
+
+    if interview_row is None:
+        return jsonify({"error": "Interview not found"}), 404
+
+    if interview_row["status"] not in ("COMPLETED", "IN_PROGRESS"):
+        return jsonify({
+            "error": f"Cannot fetch transcript for an interview with status '{interview_row['status']}'. "
+                     "Interview must be COMPLETED or IN_PROGRESS."
+        }), 400
+
+    teams_meeting_id = interview_row["teams_meeting_id"]
+    if not teams_meeting_id:
+        return jsonify({
+            "error": "No Teams meeting linked to this interview"
+        }), 400
+
+    # --- Call Teams service ------------------------------------------------
+    # Resolve organizer_user_id — raises ValueError with clear message if missing
+    try:
+        import os as _os
+        organizer_user_id = _os.getenv("TEAMS_ORGANIZER_USER_ID", "").strip()
+        if not organizer_user_id:
+            raise ValueError(
+                "Teams configuration is incomplete: environment variable "
+                "'TEAMS_ORGANIZER_USER_ID' is not set."
+            )
+        result = teams_service.fetch_meeting_transcript(
+            teams_meeting_id=teams_meeting_id,
+            organizer_user_id=organizer_user_id,
+        )
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+    except Exception:
+        from flask import current_app
+        current_app.logger.exception(
+            "Teams transcript fetch failed for interview %s", interview_id
+        )
+        return jsonify({"error": "Internal server error"}), 500
+
+
+    # --- Not ready ---------------------------------------------------------
+    if result.get("status") == "not_ready":
+        return jsonify({"message": result["message"]}), 202
+
+    # --- Success: upsert into interview_transcripts ------------------------
+    vtt_raw = result["vtt_raw"]
+    parsed_text = result["parsed_text"]
+    fetched_at_iso = result["fetched_at"]
+
+    # Parse fetched_at back to a naive UTC datetime for MySQL
+    try:
+        fetched_at_dt = datetime.fromisoformat(fetched_at_iso.replace("Z", "+00:00"))
+        fetched_at_naive = fetched_at_dt.replace(tzinfo=None)
+    except Exception:
+        fetched_at_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    upsert_sql = sa.text(
+        """
+        INSERT INTO interview_transcripts
+            (interview_id, source, vtt_raw, parsed_text, fetched_at)
+        VALUES
+            (:interview_id, 'teams_fetch', :vtt_raw, :parsed_text, :fetched_at)
+        ON DUPLICATE KEY UPDATE
+            source      = 'teams_fetch',
+            vtt_raw     = VALUES(vtt_raw),
+            parsed_text = VALUES(parsed_text),
+            fetched_at  = VALUES(fetched_at)
+        """
+    )
+    db.session.execute(
+        upsert_sql,
+        {
+            "interview_id": interview_id,
+            "vtt_raw": vtt_raw,
+            "parsed_text": parsed_text,
+            "fetched_at": fetched_at_naive,
+        },
+    )
+    db.session.commit()
+
+    # Retrieve the saved row to return its id
+    saved_row = db.session.execute(
+        sa.text(
+            """
+            SELECT id, source, parsed_text
+            FROM interview_transcripts
+            WHERE interview_id = :interview_id
+            LIMIT 1
+            """
+        ),
+        {"interview_id": interview_id},
+    ).mappings().first()
+
+    preview = (saved_row["parsed_text"] or "")[:500]
+
+    return jsonify({
+        "data": {
+            "transcript_id": saved_row["id"],
+            "source": "teams_fetch",
+            "preview": preview,
+        },
+        "message": "Transcript fetched successfully",
+    }), 200
+
+
+# ---------------------------------------------------------------------------
+# GET /api/scoring/interviews/<id>/ai-score
+# ---------------------------------------------------------------------------
+
+@scoring_bp.get("/interviews/<int:interview_id>/ai-score")
+@jwt_required()
+def get_ai_score(interview_id: int):
+    role = get_jwt().get("role")
+    if role not in SCORE_VIEW_ROLES:
+        return jsonify({"message": "Forbidden"}), 403
+
+    interview = _get_interview_row(interview_id)
+    if interview is None:
+        return jsonify({"error": "Interview not found"}), 404
+
+    row = db.session.execute(
+        sa.text(
+            """
+            SELECT id, interview_id, transcript_id, overall_score,
+                   skill_scores, strengths, concerns, recommendation,
+                   ai_raw_response, generated_at, report_status,
+                   primary_match, secondary_match, skill_breakdown, ai_suggestion
+            FROM ai_interview_scores
+            WHERE interview_id = :iid LIMIT 1
+            """
+        ),
+        {"iid": interview_id},
+    ).mappings().first()
+
+    if row is None:
+        return jsonify({"error": "No AI score found for this interview"}), 404
+
+    import json as _json
+
+    def _parse(val):
+        if val is None:
+            return None
+        if isinstance(val, (dict, list)):
+            return val
+        try:
+            return _json.loads(val)
+        except Exception:
+            return val
+
+    return jsonify({
+        "ai_score": {
+            "id": row["id"],
+            "interview_id": row["interview_id"],
+            "transcript_id": row["transcript_id"],
+            "overall_score": float(row["overall_score"]) if row["overall_score"] is not None else None,
+            "primary_match": float(row["primary_match"]) if row["primary_match"] is not None else None,
+            "secondary_match": float(row["secondary_match"]) if row["secondary_match"] is not None else None,
+            "skill_scores": _parse(row["skill_scores"]),
+            "skill_breakdown": _parse(row["skill_breakdown"]),
+            "strengths": _parse(row["strengths"]),
+            "concerns": _parse(row["concerns"]),
+            "recommendation": row["recommendation"],
+            "report_status": row["report_status"],
+            "generated_at": row["generated_at"].isoformat() if hasattr(row["generated_at"], "isoformat") else row["generated_at"],
+            "ai_suggestion": _parse(row["ai_suggestion"]),
+        }
+    }), 200
+
+
+# ---------------------------------------------------------------------------
+# POST /api/scoring/interviews/<id>/generate-score
+# ---------------------------------------------------------------------------
+
+@scoring_bp.post("/interviews/<int:interview_id>/generate-score")
+@jwt_required()
+def generate_score(interview_id: int):
+    """M4 Phase 2 — full AI scoring engine.
+
+    Auth: ADMIN, M_RECRUITER, SR_RECRUITER, QC
+    - 400: not COMPLETED, or no panelist scores
+    - 403: wrong role
+    - 404: interview not found
+    - 409: already GENERATED (use ?regenerate=true to force)
+    - 500: AI failed after 3 retries
+    - 200: full ai_interview_scores record
+    """
+    from flask import current_app
+    import json as _json
+
+    role = get_jwt().get("role")
+    if role not in GENERATE_SCORE_ROLES:
+        return jsonify({"message": "Forbidden"}), 403
+
+    interview_row = db.session.execute(
+        sa.text(
+            """
+            SELECT s.id, s.status, s.jd_id, s.candidate_id
+            FROM interview_schedules s
+            WHERE s.id = :iid LIMIT 1
+            """
+        ),
+        {"iid": interview_id},
+    ).mappings().first()
+
+    if interview_row is None:
+        return jsonify({"error": "Interview not found"}), 404
+
+    if interview_row["status"] != "COMPLETED":
+        return jsonify({
+            "error": f"Interview status is '{interview_row['status']}'. "
+                     "AI scoring requires COMPLETED status."
+        }), 400
+
+    score_count = db.session.execute(
+        sa.text("SELECT COUNT(*) AS cnt FROM interview_scores WHERE interview_id = :iid"),
+        {"iid": interview_id},
+    ).scalar()
+
+    if not score_count:
+        return jsonify({
+            "error": "No panelist scores found. At least one panelist must submit scores before generating AI analysis."
+        }), 400
+
+    regenerate = request.args.get("regenerate", "").lower() in ("true", "1", "yes")
+    existing = db.session.execute(
+        sa.text(
+            "SELECT id, report_status FROM ai_interview_scores WHERE interview_id = :iid LIMIT 1"
+        ),
+        {"iid": interview_id},
+    ).mappings().first()
+
+    if existing and existing["report_status"] == "GENERATED" and not regenerate:
+        return jsonify({
+            "error": "AI score already generated for this interview.",
+            "hint": "Add ?regenerate=true to regenerate.",
+            "existing_id": existing["id"],
+        }), 409
+
+    try:
+        result = generate_ai_score(interview_id)
+    except Exception:
+        current_app.logger.exception("generate_ai_score crashed for interview %s", interview_id)
+        return jsonify({"error": "Internal server error during AI scoring"}), 500
+
+    if result.get("report_status") == "FAILED":
+        return jsonify({
+            "error": result.get("error", "AI scoring failed"),
+            "report_status": "FAILED",
+        }), 500
+
+    saved = db.session.execute(
+        sa.text(
+            """
+            SELECT id, interview_id, transcript_id, overall_score,
+                   skill_scores, strengths, concerns, recommendation,
+                   ai_raw_response, generated_at, report_status,
+                   primary_match, secondary_match, skill_breakdown, ai_suggestion
+            FROM ai_interview_scores
+            WHERE interview_id = :iid LIMIT 1
+            """
+        ),
+        {"iid": interview_id},
+    ).mappings().first()
+
+    def _parse(val):
+        if val is None:
+            return None
+        if isinstance(val, (dict, list)):
+            return val
+        try:
+            return _json.loads(val)
+        except Exception:
+            return val
+
+    return jsonify({
+        "message": "AI score generated successfully",
+        "data": {
+            "id": saved["id"],
+            "interview_id": saved["interview_id"],
+            "overall_score": float(saved["overall_score"]) if saved["overall_score"] is not None else None,
+            "primary_match": float(saved["primary_match"]) if saved["primary_match"] is not None else None,
+            "secondary_match": float(saved["secondary_match"]) if saved["secondary_match"] is not None else None,
+            "recommendation": saved["recommendation"],
+            "report_status": saved["report_status"],
+            "skill_breakdown": _parse(saved["skill_breakdown"]),
+            "strengths": _parse(saved["strengths"]),
+            "concerns": _parse(saved["concerns"]),
+            "generated_at": saved["generated_at"].isoformat() if hasattr(saved["generated_at"], "isoformat") else saved["generated_at"],
+            "ai_suggestion": _parse(saved["ai_suggestion"]),
+        },
+    }), 200
+
+
+# ---------------------------------------------------------------------------
+# GET /api/scoring/interviews/<id>/transcript-info
+# ---------------------------------------------------------------------------
+
+@scoring_bp.get("/interviews/<int:interview_id>/transcript-info")
+@jwt_required()
+def get_transcript_info(interview_id: int):
+    """Return transcript metadata + preview for the interview detail panel.
+
+    Returns { transcript: null } when no transcript exists yet.
+    Returns { transcript: { source, parsed_text_preview, parsed_text_truncated, fetched_at, uploaded_at } } when present.
+    """
+    role = get_jwt().get("role")
+    if role not in SCORE_VIEW_ROLES:
+        return jsonify({"message": "Forbidden"}), 403
+
+    interview = _get_interview_row(interview_id)
+    if interview is None:
+        return jsonify({"error": "Interview not found"}), 404
+
+    row = db.session.execute(
+        sa.text(
+            """
+            SELECT id, source, upload_type, parsed_text, fetched_at, uploaded_at
+            FROM interview_transcripts
+            WHERE interview_id = :iid
+            LIMIT 1
+            """
+        ),
+        {"iid": interview_id},
+    ).mappings().first()
+
+    if row is None:
+        return jsonify({"transcript": None}), 200
+
+    parsed_text = row["parsed_text"] or ""
+    preview = parsed_text[:1000]
+
+    def _iso(val):
+        if val is None:
+            return None
+        return val.isoformat() if hasattr(val, "isoformat") else val
+
+    return jsonify({
+        "transcript": {
+            "id": row["id"],
+            "source": row["source"],
+            "upload_type": row["upload_type"],
+            "parsed_text_preview": preview,
+            "parsed_text_truncated": len(parsed_text) > 1000,
+            "fetched_at": _iso(row["fetched_at"]),
+            "uploaded_at": _iso(row["uploaded_at"]),
+        }
+    }), 200

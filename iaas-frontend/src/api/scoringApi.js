@@ -14,3 +14,25 @@ export function uploadInterviewTranscript(interviewId, payload) {
   }
   return axiosInstance.post(`/api/scoring/interviews/${interviewId}/transcript`, payload)
 }
+
+export function getAiScore(interviewId) {
+  return axiosInstance.get(`/api/scoring/interviews/${interviewId}/ai-score`)
+}
+
+export function generateAiScore(interviewId, regenerate = false) {
+  return axiosInstance.post(
+    `/api/scoring/interviews/${interviewId}/generate-score${regenerate ? '?regenerate=true' : ''}`
+  )
+}
+
+export function fetchTranscriptFromTeams(interviewId) {
+  return axiosInstance.post(`/api/scoring/interviews/${interviewId}/fetch-transcript`)
+}
+
+export function getTranscriptInfo(interviewId) {
+  return axiosInstance.get(`/api/scoring/interviews/${interviewId}/transcript-info`)
+}
+
+export function getInterviewScores(interviewId) {
+  return axiosInstance.get(`/api/scoring/interviews/${interviewId}/scores`)
+}

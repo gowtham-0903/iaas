@@ -22,7 +22,30 @@
       "Bash(git -C /Users/gowtham/Adroit/Projects/iaas branch -a)",
       "Bash(git -C /Users/gowtham/Adroit/Projects/iaas checkout development)",
       "Bash(git -C /Users/gowtham/Adroit/Projects/iaas merge main --ff-only)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(ls /Users/gowtham/Adroit/Projects/iaas 2>/dev/null && echo \"EXISTS\" || echo \"NOT FOUND\")",
+      "Read(//Users/gowtham/Adroit/Projects/**)",
+      "Bash(mkdir -p \"/Users/gowtham/Adroit/Projects/iaas/.claude/skills\")",
+      "Bash(mkdir -p \"/Users/gowtham/Projects /Projects/iaas/.claude/skills\")",
+      "Bash(cp /Users/gowtham/Adroit/Projects/iaas/.claude/skills/*.md \"/Users/gowtham/Projects /Projects/iaas/.claude/skills/\")",
+      "Bash(git pull *)",
+      "Bash(python -m pytest tests/test_feedback.py -v)",
+      "Bash(venv/bin/pip install *)",
+      "Bash(venv/bin/python3 -m pip install pytest pytest-flask -q)",
+      "Bash(venv/bin/python3 -m pytest tests/test_feedback.py -v)",
+      "Bash(mysql -u root -proot iaas -e ' *)",
+      "Bash(mysql -uroot -proot iaas -e \"SELECT pa.interview_id, pa.panelist_id FROM panel_assignments pa LIMIT 5;\")",
+      "Bash(mysql -uroot -pGowtham@0903 iaas_db_test -e ' *)",
+      "Bash(mysql -uroot -p'Gowtham@0903' iaas_db_test)",
+      "Bash(FLASK_APP=wsgi.py venv/bin/flask db upgrade)",
+      "Bash(venv/bin/python3 -m flask db upgrade)",
+      "Bash(venv/bin/pytest tests/test_feedback.py -v)",
+      "Bash(python -c \"from app import create_app; app = create_app\\(\\)\")",
+      "Bash(venv/bin/flask db *)",
+      "Bash(FLASK_APP=wsgi.py venv/bin/python3 -m flask db upgrade)"
+    ],
+    "additionalDirectories": [
+      "/Users/gowtham/Adroit/Projects/iaas/.claude"
     ]
   },
   "hooks": {
@@ -32,8 +55,8 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(git push *)",
             "command": "cmd=$(jq -r '.tool_input.command'); if echo \"$cmd\" | grep -qE 'git push.*(main|origin main|origin)'; then echo 'Running pytest before push to main...' >&2; cd /Users/gowtham/Adroit/Projects/iaas/iaas-backend && /Users/gowtham/Adroit/Projects/iaas/.venv/bin/pytest tests/ -q --tb=short 2>&1; rc=$?; if [ $rc -ne 0 ]; then echo '{\"continue\": false, \"stopReason\": \"Tests failed — push to main blocked. Fix the failing tests before pushing.\"}'; else echo '{\"continue\": true}'; fi; else echo '{\"continue\": true}'; fi",
+            "if": "Bash(git push *)",
             "timeout": 120,
             "statusMessage": "Running tests before push..."
           }

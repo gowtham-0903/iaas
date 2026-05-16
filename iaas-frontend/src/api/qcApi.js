@@ -15,3 +15,7 @@ export function getQCReview(interviewId) {
 export function updateQCReview(interviewId, data) {
   return axiosInstance.put(`/api/qc/interviews/${interviewId}/review`, data)
 }
+
+export function distributeReport(interviewId) {
+  return axiosInstance.post(`/api/qc/interviews/${interviewId}/distribute`)
+}

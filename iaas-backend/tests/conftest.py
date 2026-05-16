@@ -25,6 +25,7 @@ from app.models.candidate import Candidate
 from app.models.client import Client
 from app.models.feedback_validation import FeedbackValidation
 from app.models.interview_schedule import InterviewSchedule, PanelAssignment
+from app.models.panelist import Panelist
 from app.models.interview_scoring import AIInterviewScore, InterviewScore, InterviewTranscript
 from app.models.jd_panelist_assignment import JDPanelistAssignment
 from app.models.jd_recruiter_assignment import JDRecruiterAssignment
@@ -322,6 +323,53 @@ def sample_interview(app, sample_candidate, sample_jd, panelist_user):
         assignment = PanelAssignment(
             interview_id=interview.id,
             panelist_id=panelist_user.id,
+        )
+        _db.session.add(assignment)
+        _db.session.commit()
+        _db.session.refresh(interview)
+        return interview
+
+
+@pytest.fixture
+def panelist_entity(app, admin_user):
+    """A Panelist model record (references panelists table, not users)."""
+    with app.app_context():
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        p = Panelist(
+            panel_id="PAN-TEST-001",
+            name="Test Panelist",
+            skill="Python",
+            email="testpanelist@example.com",
+            created_at=now,
+            created_by=admin_user.id,
+        )
+        _db.session.add(p)
+        _db.session.commit()
+        _db.session.refresh(p)
+        return p
+
+
+@pytest.fixture
+def feedback_interview(app, sample_candidate, sample_jd, panelist_entity):
+    """An interview whose panel_assignment.panelist_id references the panelists table."""
+    with app.app_context():
+        interview = InterviewSchedule(
+            candidate_id=sample_candidate.id,
+            jd_id=sample_jd.id,
+            scheduled_at=datetime(2026, 8, 1, 10, 0, 0),
+            duration_minutes=60,
+            mode="virtual",
+            timezone="Asia/Kolkata",
+            meeting_link="https://teams.microsoft.com/l/meetup-join/test-link",
+            status="SCHEDULED",
+        )
+        _db.session.add(interview)
+        _db.session.commit()
+        _db.session.refresh(interview)
+
+        assignment = PanelAssignment(
+            interview_id=interview.id,
+            panelist_id=panelist_entity.id,
         )
         _db.session.add(assignment)
         _db.session.commit()

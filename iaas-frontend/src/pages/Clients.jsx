@@ -12,9 +12,9 @@ import { getJDs } from '../api/jdApi'
 import AppShell from '../components/AppShell'
 import useAuthStore from '../store/authStore'
 import {
-  AlertBanner, Avatar, Badge, Card, CardTitle, DangerBtn, DataTable,
+  AlertBanner, Avatar, Badge, Card, CardTitle, DangerBtn,
   EmptyState, FormField, FormInput, FormSelect, LoadingState,
-  ModalOverlay, PrimaryBtn, SecondaryBtn, TableCell, TableRow,
+  ModalOverlay, PrimaryBtn, SecondaryBtn,
 } from '../components/ui'
 
 const DEFAULT_FORM = {
@@ -285,6 +285,8 @@ export default function Clients() {
     }
   }
 
+  const clientTableColumnCount = 9
+
   return (
     <AppShell>
       {/* Topbar */}
@@ -360,77 +362,123 @@ export default function Clients() {
 
       {/* Table */}
       <Card>
-        <DataTable
-          headers={['Client', 'Industry', 'Contact Email', 'Status', 'JDs', 'Candidates', 'Selected', 'Not Selected', 'Actions']}
-          loading={isLoading}
-          loadingLabel="Loading clients..."
-        >
-          {clients.length === 0 && !isLoading ? (
-            <tr><td colSpan={9}><EmptyState message="No clients found" /></td></tr>
-          ) : (
-            clients.map((client) => (
-              <TableRow key={client.id}>
-                <TableCell>
-                  <div className="flex items-center gap-2.5">
-                    <Avatar name={client.name} />
-                    <span className="font-medium text-slate-900">{client.name}</span>
-                  </div>
-                </TableCell>
-                <TableCell>{client.industry}</TableCell>
-                <TableCell className="text-slate-500">{client.contact_email}</TableCell>
-                <TableCell>
-                  <Badge variant={client.is_active ? 'green' : 'gray'}>
-                    {client.is_active ? 'Active' : 'Inactive'}
-                  </Badge>
-                </TableCell>
-                <TableCell><span className="font-semibold text-slate-800">{client.metrics?.jd_count ?? 0}</span></TableCell>
-                <TableCell><span className="font-semibold text-slate-800">{client.metrics?.candidate_count ?? 0}</span></TableCell>
-                <TableCell><span className="font-semibold text-emerald-600">{client.metrics?.selected_count ?? 0}</span></TableCell>
-                <TableCell><span className="font-semibold text-red-500">{client.metrics?.not_selected_count ?? 0}</span></TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {isAdmin && (
-                      <button
-                        type="button"
-                        onClick={() => handleEditClick(client)}
-                        className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
-                      >
-                        Edit
-                      </button>
-                    )}
-                    {isAdmin && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDeletingClientId(client.id)
-                          setShowCreateForm(false)
-                          setEditingClient(null)
-                        }}
-                        className="text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
-                      >
-                        Delete
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => navigate('/jd')}
-                      className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+        <div className="overflow-x-auto -mx-5">
+          <div className="min-w-full px-5">
+            <table className="w-full table-fixed min-w-0">
+              <thead className="sticky top-0 z-10 bg-white">
+                <tr className="border-b border-slate-100">
+                  <th className="text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 w-[22%] min-w-[200px]">Client</th>
+                  <th className="hidden md:table-cell text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 w-[14%] min-w-[140px]">Industry</th>
+                  <th className="hidden lg:table-cell text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 w-[18%] min-w-[180px]">Contact Email</th>
+                  <th className="text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 w-[10%] min-w-[120px]">Status</th>
+                  <th className="hidden md:table-cell text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 w-[8%] min-w-[90px]">JDs</th>
+                  <th className="hidden md:table-cell text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 w-[10%] min-w-[110px]">Candidates</th>
+                  <th className="hidden lg:table-cell text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 w-[10%] min-w-[110px]">Selected</th>
+                  <th className="hidden lg:table-cell text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 w-[12%] min-w-[130px]">Not Selected</th>
+                  <th className="text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 w-[180px]">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {isLoading ? (
+                  <tr>
+                    <td colSpan={clientTableColumnCount}>
+                      <LoadingState label="Loading clients..." />
+                    </td>
+                  </tr>
+                ) : clients.length === 0 ? (
+                  <tr>
+                    <td colSpan={clientTableColumnCount}>
+                      <EmptyState message="No clients found" />
+                    </td>
+                  </tr>
+                ) : (
+                  clients.map((client) => (
+                    <tr
+                      key={client.id}
+                      className="border-b border-slate-50 hover:bg-slate-50/60 transition-colors last:border-0"
                     >
-                      JDs
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/candidates?clientId=${client.id}`)}
-                      className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
-                    >
-                      Candidates
-                    </button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))
-          )}
-        </DataTable>
+                      <td className="px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-700 align-top">
+                        <div className="flex items-center gap-2.5">
+                          <Avatar name={client.name} />
+                          <span className="font-medium text-slate-900 break-words line-clamp-2" title={client.name}>
+                            {client.name}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="hidden md:table-cell px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-700 align-top">
+                        <span className="block break-words line-clamp-2" title={client.industry}>
+                          {client.industry}
+                        </span>
+                      </td>
+                      <td className="hidden lg:table-cell px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-500 align-top">
+                        <span className="block break-all line-clamp-2" title={client.contact_email}>
+                          {client.contact_email}
+                        </span>
+                      </td>
+                      <td className="px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-700 align-top">
+                        <Badge variant={client.is_active ? 'green' : 'gray'}>
+                          {client.is_active ? 'Active' : 'Inactive'}
+                        </Badge>
+                      </td>
+                      <td className="hidden md:table-cell px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-700 align-top">
+                        <span className="font-semibold text-slate-800">{client.metrics?.jd_count ?? 0}</span>
+                      </td>
+                      <td className="hidden md:table-cell px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-700 align-top">
+                        <span className="font-semibold text-slate-800">{client.metrics?.candidate_count ?? 0}</span>
+                      </td>
+                      <td className="hidden lg:table-cell px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-700 align-top">
+                        <span className="font-semibold text-emerald-600">{client.metrics?.selected_count ?? 0}</span>
+                      </td>
+                      <td className="hidden lg:table-cell px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-700 align-top">
+                        <span className="font-semibold text-red-500">{client.metrics?.not_selected_count ?? 0}</span>
+                      </td>
+                      <td className="px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-700 align-top">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => handleEditClick(client)}
+                              className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                            >
+                              Edit
+                            </button>
+                          )}
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDeletingClientId(client.id)
+                                setShowCreateForm(false)
+                                setEditingClient(null)
+                              }}
+                              className="text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                            >
+                              Delete
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/jd?clientId=${client.id}`)}
+                            className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                          >
+                            JDs
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/candidates?clientId=${client.id}`)}
+                            className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                          >
+                            Candidates
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </Card>
     </AppShell>
   )

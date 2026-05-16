@@ -29,6 +29,8 @@ class Config:
         )
     CORS_ORIGINS = [o.strip() for o in _cors_raw.split(",") if o.strip()] or ["http://localhost:5173"]
 
+    MAX_CONTENT_LENGTH = 100 * 1024 * 1024  # 100 MB — for large Excel panelist uploads
+
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=15)
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=7)
 

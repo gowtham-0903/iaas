@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, datetime, time, timezone
+import uuid
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import pytz
@@ -17,6 +18,7 @@ from app.models.candidate import Candidate
 from app.models.jd_recruiter_assignment import JDRecruiterAssignment
 from app.models.jd_skill import JDSkill
 from app.models.job_description import JobDescription
+from app.models.panelist import Panelist
 from app.models.user import User, UserRole
 from app.services.email_service import (
     send_interview_notification_to_additional_recipient,
@@ -40,7 +42,6 @@ LIST_ALLOWED_ROLES = {
     UserRole.M_RECRUITER.value,
     UserRole.SR_RECRUITER.value,
     UserRole.RECRUITER.value,
-    UserRole.PANELIST.value,
 }
 
 STATUS_UPDATE_ROLES = {
@@ -190,11 +191,11 @@ def _fetch_panelists_for_interviews(interview_ids: List[int]) -> Dict[int, List[
 
     stmt = sa.text(
         """
-        SELECT pa.interview_id, u.id AS panelist_id, u.full_name, u.email
+        SELECT pa.interview_id, p.id AS panelist_id, p.name AS full_name, p.email
         FROM panel_assignments pa
-        JOIN users u ON u.id = pa.panelist_id
+        JOIN panelists p ON p.id = pa.panelist_id
         WHERE pa.interview_id IN :interview_ids
-        ORDER BY pa.interview_id, u.full_name
+        ORDER BY pa.interview_id, p.name
         """
     ).bindparams(sa.bindparam("interview_ids", expanding=True))
 
@@ -319,11 +320,6 @@ def _build_interview_filters(role: str, user: User, include_interview_id: Option
             ")"
         )
         params["op_id"] = user.id
-    elif role == UserRole.PANELIST.value:
-        filters.append(
-            "EXISTS (SELECT 1 FROM panel_assignments pa_f WHERE pa_f.interview_id = s.id AND pa_f.panelist_id = :panelist_id)"
-        )
-        params["panelist_id"] = user.id
     elif role in {UserRole.RECRUITER.value, UserRole.SR_RECRUITER.value, UserRole.M_RECRUITER.value}:
         if user.client_id is None:
             filters.append("1 = 0")
@@ -459,13 +455,9 @@ def create_interview():
     if not _candidate_accessible_for_user(role, user, candidate):
         return jsonify({"message": "Forbidden"}), 403
 
-    panelists = User.query.filter(User.id.in_(panelist_ids)).all()
+    panelists = Panelist.query.filter(Panelist.id.in_(panelist_ids)).all()
     if len(panelists) != len(panelist_ids):
         return jsonify({"error": "One or more panelist IDs were not found"}), 404
-
-    invalid_panelists = [panelist.id for panelist in panelists if panelist.role != UserRole.PANELIST.value]
-    if invalid_panelists:
-        return jsonify({"errors": {"panelist_ids": [f"Users {invalid_panelists} are not PANELIST"]}}), 400
 
     # Fetch all recruiters assigned to this JD to include in Teams invite
     assigned_recruiter_ids = [
@@ -511,19 +503,34 @@ def create_interview():
         )
         interview_id = interview_result.lastrowid
 
+        # Token valid for 168 hours (1 week) starting from interview end time
+        interview_end_utc = scheduled_at_utc + timedelta(minutes=duration_minutes)
+        token_expires_at = interview_end_utc + timedelta(hours=168)
+
         assignment_stmt = sa.text(
             """
-            INSERT INTO panel_assignments (interview_id, panelist_id, created_at)
-            VALUES (:interview_id, :panelist_id, :created_at)
+            INSERT INTO panel_assignments
+                (interview_id, panelist_id, created_at, feedback_token,
+                 token_valid_from, token_expires_at, token_used)
+            VALUES
+                (:interview_id, :panelist_id, :created_at, :feedback_token,
+                 :token_valid_from, :token_expires_at, :token_used)
             """
         )
+        panelist_tokens: Dict[int, str] = {}
         for panelist_id in panelist_ids:
+            token = str(uuid.uuid4())
+            panelist_tokens[panelist_id] = token
             db.session.execute(
                 assignment_stmt,
                 {
                     "interview_id": interview_id,
                     "panelist_id": panelist_id,
                     "created_at": created_at,
+                    "feedback_token": token,
+                    "token_valid_from": interview_end_utc,
+                    "token_expires_at": token_expires_at,
+                    "token_used": False,
                 },
             )
 
@@ -553,8 +560,8 @@ def create_interview():
             duration_minutes=duration_minutes,
             candidate_email=candidate.email,
             candidate_name=candidate.full_name,
-            panelist_emails=[panelist.email for panelist in panelists],
-            panelist_names=[panelist.full_name for panelist in panelists],
+            panelist_emails=[p.email for p in panelists],
+            panelist_names=[p.name for p in panelists],
             notes=notes,
             extra_attendee_emails=extra_emails,
             extra_attendee_names=extra_names,
@@ -600,11 +607,19 @@ def create_interview():
         client_name=client_name_for_email,
     )
     for panelist in panelists:
-        send_interview_scheduled_to_panelist(panelist, candidate, interview, jd)
+        feedback_token = panelist_tokens.get(panelist.id, "")
+        send_interview_scheduled_to_panelist(
+            panelist, candidate, interview, jd,
+            feedback_token=feedback_token,
+            jd_skills=jd_skills_for_email,
+        )
     for recruiter in assigned_recruiters:
         send_interview_scheduled_to_recruiter(recruiter, candidate, interview, jd)
     for email in additional_emails:
-        send_interview_notification_to_additional_recipient(email, candidate, interview, jd)
+        send_interview_notification_to_additional_recipient(
+            email, candidate, interview, jd,
+            jd_skills=jd_skills_for_email,
+        )
 
     return jsonify({"interview": interview}), 201
 
@@ -840,11 +855,14 @@ def create_panelist_availability():
     return jsonify({"message": "Availability updated", "created": created}), 201
 
 
+AVAILABILITY_READ_ROLES = LIST_ALLOWED_ROLES | {UserRole.PANELIST.value}
+
+
 @interviews_bp.get("/panelist-availability")
 @jwt_required()
 def list_panelist_availability():
     role = get_jwt().get("role")
-    if role not in LIST_ALLOWED_ROLES:
+    if role not in AVAILABILITY_READ_ROLES:
         return jsonify({"message": "Forbidden"}), 403
 
     user = _get_current_user()

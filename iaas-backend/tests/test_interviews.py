@@ -11,6 +11,7 @@ import pytest
 
 from app.extensions import db
 from app.models.interview_schedule import InterviewSchedule
+from app.models.panelist import Panelist
 from tests.conftest import auth_headers
 
 
@@ -47,7 +48,7 @@ def test_schedule_interview_success(
     mock_notify_rec,
     mock_notify_panelist,
     mock_notify_candidate,
-    app, client, admin_user, sample_candidate, sample_jd, panelist_user
+    app, client, admin_user, sample_candidate, sample_jd, panelist_entity
 ):
     mock_teams.return_value = {
         "join_url": "https://teams.microsoft.com/l/meetup-join/mock",
@@ -56,7 +57,7 @@ def test_schedule_interview_success(
     }
 
     headers = auth_headers(app, admin_user)
-    payload = _schedule_payload(sample_candidate.id, sample_jd.id, panelist_user.id)
+    payload = _schedule_payload(sample_candidate.id, sample_jd.id, panelist_entity.id)
     resp = client.post("/api/interviews", json=payload, headers=headers)
 
     assert resp.status_code == 201
@@ -131,11 +132,13 @@ def test_list_interviews_unauthenticated(client):
     assert resp.status_code == 401
 
 
-def test_list_interviews_panelist_sees_own(app, client, panelist_user, sample_interview):
-    """A panelist should see only interviews they are assigned to."""
-    headers = auth_headers(app, panelist_user)
+def test_list_interviews_admin_sees_all(app, client, admin_user, sample_interview):
+    """Admin should see all interviews."""
+    headers = auth_headers(app, admin_user)
     resp = client.get("/api/interviews", headers=headers)
     assert resp.status_code == 200
+    data = resp.get_json()
+    assert "interviews" in data
 
 
 # ---------------------------------------------------------------------------

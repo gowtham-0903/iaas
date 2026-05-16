@@ -17,3 +17,7 @@ class FeedbackValidation(db.Model):
     validated_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    # M4 Phase 1 — report distribution tracking
+    distribution_triggered = db.Column(db.Boolean, nullable=False, default=False)
+    distributed_at = db.Column(db.DateTime, nullable=True)
+    distributed_to = db.Column(db.JSON, nullable=True)

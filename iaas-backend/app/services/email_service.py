@@ -1,3 +1,4 @@
+import base64
 import logging
 import os
 from datetime import datetime
@@ -6,12 +7,58 @@ from typing import Any, List, Optional
 import pytz
 from dotenv import load_dotenv
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+from sendgrid.helpers.mail import (
+    Attachment,
+    Disposition,
+    FileContent,
+    FileName,
+    FileType,
+    Mail,
+)
 
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# Root of the uploads directory — two levels up from this file (iaas-backend/uploads/)
+_UPLOADS_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads")
+_ATTACH_MIME = {
+    ".pdf":  "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".doc":  "application/msword",
+}
+
+
+def _build_attachment(file_url: str, display_name: str):
+    """Read a local uploads/ file and return a SendGrid Attachment. Returns None on failure."""
+    if not file_url:
+        return None
+    try:
+        # file_url is stored as "uploads/resumes/..." relative to iaas-backend/
+        if file_url.startswith("uploads/"):
+            abs_path = os.path.join(os.path.dirname(_UPLOADS_ROOT), file_url)
+        else:
+            abs_path = file_url
+        if not os.path.isfile(abs_path):
+            logger.warning("Attachment file not found: %s", abs_path)
+            return None
+        if os.path.getsize(abs_path) > 5 * 1024 * 1024:
+            logger.warning("Attachment too large, skipping: %s", abs_path)
+            return None
+        with open(abs_path, "rb") as fh:
+            encoded = base64.b64encode(fh.read()).decode()
+        ext = os.path.splitext(abs_path)[1].lower()
+        mime = _ATTACH_MIME.get(ext, "application/octet-stream")
+        att = Attachment()
+        att.file_content = FileContent(encoded)
+        att.file_name = FileName(display_name)
+        att.file_type = FileType(mime)
+        att.disposition = Disposition("attachment")
+        return att
+    except Exception:
+        logger.warning("Could not build attachment for %s", file_url, exc_info=True)
+        return None
 
 _SKILL_TYPE_ORDER = {"primary": 0, "secondary": 1, "soft": 2}
 
@@ -92,7 +139,7 @@ def _get_sendgrid_config():
     return api_key, from_email
 
 
-def _send_via_sendgrid(to_email: str, subject: str, **content_kwargs) -> bool:
+def _send_via_sendgrid(to_email: str, subject: str, attachments: Optional[List] = None, **content_kwargs) -> bool:
     if not isinstance(to_email, str) or "@" not in to_email:
         logger.error("SendGrid skipped: invalid recipient '%s'", to_email)
         return False
@@ -101,6 +148,10 @@ def _send_via_sendgrid(to_email: str, subject: str, **content_kwargs) -> bool:
         return False
     try:
         message = Mail(from_email=from_email, to_emails=to_email.strip().lower(), subject=subject, **content_kwargs)
+        if attachments:
+            for att in attachments:
+                if att is not None:
+                    message.add_attachment(att)
         response = SendGridAPIClient(api_key).send(message)
         status = int(response.status_code)
         if 200 <= status < 300:
@@ -119,8 +170,8 @@ def _send_plain_text_email(to_email: str, subject: str, body_text: str) -> bool:
     return _send_via_sendgrid(to_email, subject, plain_text_content=body_text)
 
 
-def _send_html_email(to_email: str, subject: str, html_content: str) -> bool:
-    return _send_via_sendgrid(to_email, subject, html_content=html_content)
+def _send_html_email(to_email: str, subject: str, html_content: str, attachments: Optional[List] = None) -> bool:
+    return _send_via_sendgrid(to_email, subject, attachments=attachments, html_content=html_content)
 
 
 def _build_skills_rows_html(jd_skills: List[dict]) -> str:
@@ -349,130 +400,340 @@ def send_interview_scheduled_to_candidate(
         return False
 
 
-def send_interview_scheduled_to_panelist(panelist, candidate, interview, jd) -> bool:
+_FEEDBACK_BASE_URL = "https://app.meedenlabs.com/feedback"
+_APP_BASE_URL = os.getenv("APP_BASE_URL", "https://testiaas.meedenlabs.com")
+
+
+def _build_panelist_invitation_html(
+    panelist_name: str,
+    candidate_name: str,
+    candidate_email: str,
+    jd_title: str,
+    client_name: str,
+    date_str: str,
+    time_str: str,
+    duration_minutes: int,
+    meeting_link: Optional[str],
+    jd_skills: List[dict],
+    resume_url: Optional[str],
+    feedback_link: Optional[str],
+) -> str:
+    """Build rich HTML invitation email for panelists."""
+    skills_rows = _build_skills_rows_html(jd_skills)
+
+    if meeting_link:
+        meeting_rows = (
+            "<tr><td style='padding:0 0 24px 0;'>"
+            "<p style='font-size:14px;font-weight:700;color:#1a1a1a;margin:0 0 8px 0;'>Teams Meeting Link:</p>"
+            f"<a href='{meeting_link}' style='display:inline-block;background:#0078d4;color:#ffffff;"
+            "text-decoration:none;font-size:13px;font-weight:600;padding:10px 22px;border-radius:6px;'>"
+            "Join the Meeting Now</a>"
+            "</td></tr>"
+        )
+    else:
+        meeting_rows = (
+            "<tr><td style='padding:0 0 24px 0;'>"
+            "<p style='font-size:13px;color:#6b7280;margin:0;'>"
+            "A Microsoft Teams meeting link will be shared with you separately.</p>"
+            "</td></tr>"
+        )
+
+    resume_rows = ""
+    if resume_url:
+        resume_rows = (
+            "<tr><td style='padding:0 0 24px 0;'>"
+            "<p style='font-size:14px;font-weight:700;color:#1a1a1a;margin:0 0 8px 0;'>Candidate Resume:</p>"
+            f"<a href='{resume_url}' style='display:inline-block;background:#10b981;color:#ffffff;"
+            "text-decoration:none;font-size:13px;font-weight:600;padding:10px 22px;border-radius:6px;'>"
+            "Download Resume</a>"
+            "</td></tr>"
+        )
+
+    feedback_rows = ""
+    if feedback_link:
+        feedback_rows = (
+            "<tr><td style='padding:0 0 24px 0;'>"
+            "<p style='font-size:14px;font-weight:700;color:#1a1a1a;margin:0 0 8px 0;'>After the Interview:</p>"
+            "<p style='margin:0 0 10px 0;font-size:13px;color:#374151;line-height:1.6;'>"
+            "Please submit your detailed feedback using the link below. "
+            "Your evaluation will help us make the best hiring decision.</p>"
+            f"<a href='{feedback_link}' style='display:inline-block;background:#f59e0b;color:#ffffff;"
+            "text-decoration:none;font-size:13px;font-weight:600;padding:10px 22px;border-radius:6px;'>"
+            "Submit Feedback</a>"
+            "<p style='margin:12px 0 0 0;font-size:11px;color:#6b7280;'>"
+            "(Link expires 7 days after the interview)</p>"
+            "</td></tr>"
+        )
+
+    divider = "<tr><td style='padding:0 0 24px 0;'><hr style='border:none;border-top:1px solid #e5e7eb;margin:0;'></td></tr>"
+
+    prep_notes = (
+        "<tr><td style='padding:0 0 24px 0;'>"
+        "<p style='font-size:14px;font-weight:700;color:#1a1a1a;margin:0 0 6px 0;'>"
+        "Preparation Notes</p>"
+        "<ul style='margin:0;padding-left:22px;color:#374151;font-size:13px;line-height:1.9;'>"
+        "<li>Review the candidate resume and focus areas before the interview.</li>"
+        "<li>Evaluate the candidate objectively on the mentioned skills.</li>"
+        "<li>Take notes on strengths, areas for improvement, and overall fit.</li>"
+        "<li>Join 5 minutes early to test your audio/video setup.</li>"
+        "</ul>"
+        "</td></tr>"
+    )
+
+    return (
+        "<!DOCTYPE html>"
+        "<html lang='en'><head><meta charset='UTF-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1.0'></head>"
+        "<body style='margin:0;padding:0;background-color:#f3f4f6;"
+        "font-family:Arial,Helvetica,sans-serif;'>"
+        "<table width='100%' cellpadding='0' cellspacing='0'"
+        " style='background-color:#f3f4f6;padding:32px 16px;'><tr><td align='center'>"
+        "<table width='600' cellpadding='0' cellspacing='0'"
+        " style='background:#ffffff;border-radius:8px;"
+        "box-shadow:0 2px 8px rgba(0,0,0,0.07);overflow:hidden;max-width:600px;'>"
+        # ── Header ──
+        "<tr><td style='background:#0078d4;padding:28px 36px;'>"
+        "<p style='margin:0;color:#ffffff;font-size:11px;font-weight:600;"
+        "letter-spacing:1px;text-transform:uppercase;opacity:0.85;'>"
+        "Virtual Interview Assignment</p>"
+        f"<h1 style='margin:6px 0 0 0;color:#ffffff;font-size:22px;font-weight:700;line-height:1.3;'>{jd_title}</h1>"
+        "</td></tr>"
+        # ── Body ──
+        "<tr><td style='padding:32px 36px 0 36px;'>"
+        "<table width='100%' cellpadding='0' cellspacing='0'>"
+        # Greeting
+        "<tr><td style='padding:0 0 16px 0;'>"
+        f"<p style='margin:0 0 10px 0;font-size:14px;color:#1a1a1a;'>Dear <strong>{panelist_name}</strong>,</p>"
+        f"<p style='margin:0;font-size:14px;color:#374151;line-height:1.7;'>"
+        f"You have been assigned to evaluate a candidate for the <strong>{jd_title}</strong> position at <strong>{client_name}</strong>."
+        "</p>"
+        "</td></tr>"
+        # Candidate info
+        "<tr><td style='padding:0 0 20px 0;'>"
+        "<table width='100%' cellpadding='0' cellspacing='0'"
+        " style='background:#f0f7ff;border-left:4px solid #0078d4;border-radius:4px;padding:16px 18px;'>"
+        "<tr><td>"
+        "<p style='margin:0 0 8px 0;font-size:12px;font-weight:700;color:#0078d4;"
+        "text-transform:uppercase;letter-spacing:0.5px;'>Candidate Information</p>"
+        f"<p style='margin:0;font-size:14px;font-weight:600;color:#1a1a1a;'>{candidate_name}</p>"
+        f"<p style='margin:2px 0 0 0;font-size:13px;color:#6b7280;'>{candidate_email}</p>"
+        "</td></tr>"
+        "</table>"
+        "</td></tr>"
+        # Interview details card
+        "<tr><td style='padding:0 0 24px 0;'>"
+        "<table width='100%' cellpadding='0' cellspacing='0'"
+        " style='background:#f0f4ff;border-left:4px solid #0078d4;border-radius:4px;padding:18px 20px;'>"
+        "<tr><td>"
+        "<p style='margin:0 0 12px 0;font-size:12px;font-weight:700;color:#0078d4;"
+        "text-transform:uppercase;letter-spacing:0.5px;'>Interview Details</p>"
+        "<table cellpadding='0' cellspacing='0'>"
+        "<tr>"
+        "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;min-width:100px;'>Position</td>"
+        f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{jd_title}</td>"
+        "</tr><tr>"
+        "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Date</td>"
+        f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{date_str}</td>"
+        "</tr><tr>"
+        "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Time</td>"
+        f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{time_str}</td>"
+        "</tr><tr>"
+        "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Duration</td>"
+        f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{duration_minutes} minutes</td>"
+        "</tr><tr>"
+        "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Mode</td>"
+        "<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>Microsoft Teams – Virtual</td>"
+        "</tr>"
+        "</table>"
+        "</td></tr>"
+        "</table>"
+        "</td></tr>"
+        # Meeting link
+        + meeting_rows
+        # Resume
+        + resume_rows
+        # Skills / Focus Areas
+        + skills_rows
+        # Divider
+        + divider
+        # Preparation notes
+        + prep_notes
+        # Divider
+        + divider
+        # Feedback submission
+        + feedback_rows
+        # Closing
+        + (
+            "<tr><td style='padding:0 0 32px 0;'>"
+            "<p style='margin:0;font-size:13px;color:#6b7280;'>"
+            "Thank you for taking the time to evaluate this candidate. "
+            "Your feedback is crucial to our hiring decision."
+            "</p>"
+            "</td></tr>"
+        )
+        + "</table>"  # close inner table
+        + "</td></tr>"  # close body td
+        # Footer
+        + (
+            "<tr><td style='background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 36px;'>"
+            "<p style='margin:0;font-size:13px;color:#374151;line-height:1.8;'>"
+            "Warm regards,<br>"
+            "<strong>MeedenLabs Team</strong>"
+            "</p>"
+            "</td></tr>"
+        )
+        + "</table>"   # close outer card table
+        + "</td></tr></table>"  # close wrapper
+        + "</body></html>"
+    )
+
+
+def send_interview_scheduled_to_panelist(
+    panelist, candidate, interview, jd, feedback_token: str = "", jd_skills: Optional[List[dict]] = None
+) -> bool:
     try:
         panelist_email = _field(panelist, "email")
-        panelist_name = _field(panelist, "full_name", "Panelist")
+        panelist_name = _field(panelist, "name") or _field(panelist, "full_name", "Panelist")
         candidate_name = _field(candidate, "full_name", "Candidate")
         candidate_email = _field(candidate, "email", "—")
+        _raw_resume = _field(candidate, "resume_url")
+        _candidate_id = _field(candidate, "id")
+        candidate_resume_url = (
+            f"{_APP_BASE_URL}/api/candidates/{_candidate_id}/resume"
+            if _raw_resume and _candidate_id else None
+        )
         jd_title = _field(jd, "title", "Interview")
+        client_name = _field(jd.client, "name", "MeedenLabs") if hasattr(jd, "client") else "MeedenLabs"
         meeting_link = _field(interview, "meeting_link")
         duration_minutes = _field(interview, "duration_minutes", 60)
         tz_str = _field(interview, "timezone", "America/New_York")
-        time_display = _format_local_time(_field(interview, "scheduled_at"), tz_str)
+        scheduled_at = _field(interview, "scheduled_at")
 
-        lines = [
-            f"Hello {panelist_name},",
-            "",
-            "You have been assigned to an interview.",
-            f"Candidate: {candidate_name}",
-            f"Candidate Email: {candidate_email}",
-            f"JD Title: {jd_title}",
-            f"Date & Time: {time_display}",
-            "Mode: Microsoft Teams (Virtual)",
-            f"Duration: {duration_minutes} minutes",
-        ]
+        date_str, time_str, subject_dt = _format_date_parts(scheduled_at, tz_str)
 
-        if meeting_link:
-            lines.extend(["", f"Your Teams meeting link: {meeting_link}"])
+        feedback_link = ""
+        if feedback_token:
+            feedback_link = f"{_FEEDBACK_BASE_URL}/{feedback_token}"
 
-        lines.extend([
-            "",
-            "Please review the candidate profile and be prepared.",
-            "Regards,",
-            "MeedenLabs Team",
-        ])
+        subject = f"Interview Assignment — {jd_title} | {candidate_name} | {subject_dt}"
 
-        subject = f"Interview Assignment — {jd_title}"
-        return _send_plain_text_email(panelist_email, subject, "\n".join(lines))
+        html = _build_panelist_invitation_html(
+            panelist_name=panelist_name,
+            candidate_name=candidate_name,
+            candidate_email=candidate_email,
+            jd_title=jd_title,
+            client_name=client_name,
+            date_str=date_str,
+            time_str=time_str,
+            duration_minutes=duration_minutes,
+            meeting_link=meeting_link,
+            jd_skills=jd_skills or [],
+            resume_url=candidate_resume_url,
+            feedback_link=feedback_link,
+        )
+
+        attachments = []
+        if _raw_resume:
+            ext = os.path.splitext(_raw_resume)[1] or ".pdf"
+            safe = candidate_name.replace(" ", "_")
+            att = _build_attachment(_raw_resume, f"Resume_{safe}{ext}")
+            if att:
+                attachments.append(att)
+        jd_file_url = _field(jd, "file_url")
+        if jd_file_url:
+            ext = os.path.splitext(jd_file_url)[1] or ".pdf"
+            safe_jd = jd_title.replace(" ", "_")[:40]
+            att = _build_attachment(jd_file_url, f"JD_{safe_jd}{ext}")
+            if att:
+                attachments.append(att)
+
+        return _send_html_email(panelist_email, subject, html, attachments=attachments or None)
     except Exception as exc:
         logger.exception("Failed to prepare panelist schedule email: %s", exc)
         return False
 
 
-def send_interview_notification_to_additional_recipient(email: str, candidate, interview, jd) -> bool:
+def send_feedback_reminder_email(
+    panelist_email: str,
+    panelist_name: str,
+    candidate_name: str,
+    jd_title: str,
+    feedback_link: str,
+) -> bool:
+    try:
+        lines = [
+            f"Hello {panelist_name},",
+            "",
+            f"This is a reminder to submit your feedback for the recent interview with {candidate_name}.",
+            f"Position: {jd_title}",
+            "",
+            "Please submit your feedback using the link below:",
+            f"Feedback Link: {feedback_link}",
+            "",
+            "Note: This link expires 48 hours after the interview time and can only be used once.",
+            "",
+            "Regards,",
+            "MeedenLabs Team",
+        ]
+        subject = f"Feedback Reminder — {jd_title} | {candidate_name}"
+        return _send_plain_text_email(panelist_email, subject, "\n".join(lines))
+    except Exception as exc:
+        logger.exception("Failed to prepare feedback reminder email: %s", exc)
+        return False
+
+
+def send_interview_notification_to_additional_recipient(email: str, candidate, interview, jd, jd_skills: Optional[List[dict]] = None) -> bool:
     try:
         candidate_name = _field(candidate, "full_name", "Candidate")
         candidate_email = _field(candidate, "email", "—")
+        _raw_resume = _field(candidate, "resume_url")
+        _candidate_id = _field(candidate, "id")
+        candidate_resume_url = (
+            f"{_APP_BASE_URL}/api/candidates/{_candidate_id}/resume"
+            if _raw_resume and _candidate_id else None
+        )
         jd_title = _field(jd, "title", "Interview")
+        client_name = _field(jd.client, "name", "MeedenLabs") if hasattr(jd, "client") else "MeedenLabs"
         meeting_link = _field(interview, "meeting_link")
         duration_minutes = _field(interview, "duration_minutes", 60)
         tz_str = _field(interview, "timezone", "America/New_York")
-        date_str, time_str, subject_dt = _format_date_parts(_field(interview, "scheduled_at"), tz_str)
+        scheduled_at = _field(interview, "scheduled_at")
 
-        if meeting_link:
-            link_html = (
-                "<tr><td style='padding:0 0 20px 0;'>"
-                "<p style='font-size:14px;font-weight:700;color:#1a1a1a;margin:0 0 8px 0;'>Teams Meeting Link</p>"
-                f"<a href='{meeting_link}' style='display:inline-block;background:#0078d4;color:#ffffff;"
-                "text-decoration:none;font-size:13px;font-weight:600;padding:10px 22px;border-radius:6px;'>"
-                "Join the Meeting</a>"
-                "</td></tr>"
-            )
-        else:
-            link_html = ""
-
-        html = (
-            "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'>"
-            "<meta name='viewport' content='width=device-width,initial-scale=1.0'></head>"
-            "<body style='margin:0;padding:0;background-color:#f3f4f6;font-family:Arial,Helvetica,sans-serif;'>"
-            "<table width='100%' cellpadding='0' cellspacing='0' style='background-color:#f3f4f6;padding:32px 16px;'>"
-            "<tr><td align='center'>"
-            "<table width='600' cellpadding='0' cellspacing='0'"
-            " style='background:#ffffff;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.07);overflow:hidden;max-width:600px;'>"
-            "<tr><td style='background:#0078d4;padding:28px 36px;'>"
-            "<p style='margin:0;color:#ffffff;font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;opacity:0.85;'>Interview Notification</p>"
-            f"<h1 style='margin:6px 0 0 0;color:#ffffff;font-size:22px;font-weight:700;line-height:1.3;'>{jd_title}</h1>"
-            "</td></tr>"
-            "<tr><td style='padding:32px 36px 0 36px;'>"
-            "<table width='100%' cellpadding='0' cellspacing='0'>"
-            "<tr><td style='padding:0 0 16px 0;'>"
-            "<p style='margin:0;font-size:14px;color:#374151;line-height:1.7;'>Hello,</p>"
-            "<p style='margin:8px 0 0 0;font-size:14px;color:#374151;line-height:1.7;'>"
-            f"An interview has been scheduled for <strong>{candidate_name}</strong> ({candidate_email}) "
-            f"for the <strong>{jd_title}</strong> position. You are receiving this notification as an additional recipient.</p>"
-            "</td></tr>"
-            "<tr><td style='padding:0 0 24px 0;'>"
-            "<table width='100%' cellpadding='0' cellspacing='0'"
-            " style='background:#f0f7ff;border-left:4px solid #0078d4;border-radius:4px;padding:18px 20px;'>"
-            "<tr><td>"
-            "<p style='margin:0 0 12px 0;font-size:12px;font-weight:700;color:#0078d4;text-transform:uppercase;letter-spacing:0.5px;'>Interview Details</p>"
-            "<table cellpadding='0' cellspacing='0'>"
-            "<tr>"
-            "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;min-width:80px;'>Candidate</td>"
-            f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{candidate_name}</td>"
-            "</tr><tr>"
-            "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Position</td>"
-            f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{jd_title}</td>"
-            "</tr><tr>"
-            "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Date</td>"
-            f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{date_str}</td>"
-            "</tr><tr>"
-            "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Time</td>"
-            f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{time_str}</td>"
-            "</tr><tr>"
-            "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Duration</td>"
-            f"<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>{duration_minutes} minutes</td>"
-            "</tr><tr>"
-            "<td style='font-size:13px;color:#6b7280;padding:3px 16px 3px 0;'>Mode</td>"
-            "<td style='font-size:13px;color:#1a1a1a;font-weight:600;'>Microsoft Teams – Virtual</td>"
-            "</tr>"
-            "</table></td></tr></table>"
-            "</td></tr>"
-            + link_html
-            + "<tr><td style='padding:0 0 32px 0;'>"
-            "<p style='margin:0;font-size:13px;color:#6b7280;'>This is an automated notification. Please do not reply to this email.</p>"
-            "</td></tr>"
-            "</table></td></tr>"
-            "<tr><td style='background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 36px;'>"
-            "<p style='margin:0;font-size:13px;color:#374151;line-height:1.8;'>"
-            "Warm regards,<br><strong>MeedenLabs Team</strong></p>"
-            "</td></tr>"
-            "</table></td></tr></table></body></html>"
-        )
+        date_str, time_str, subject_dt = _format_date_parts(scheduled_at, tz_str)
 
         subject = f"Interview Notification — {jd_title} | {candidate_name} | {subject_dt}"
-        return _send_html_email(email, subject, html)
+
+        html = _build_panelist_invitation_html(
+            panelist_name="Hiring Team",
+            candidate_name=candidate_name,
+            candidate_email=candidate_email,
+            jd_title=jd_title,
+            client_name=client_name,
+            date_str=date_str,
+            time_str=time_str,
+            duration_minutes=duration_minutes,
+            meeting_link=meeting_link,
+            jd_skills=jd_skills or [],
+            resume_url=candidate_resume_url,
+            feedback_link="",
+        )
+
+        attachments = []
+        if _raw_resume:
+            ext = os.path.splitext(_raw_resume)[1] or ".pdf"
+            safe = candidate_name.replace(" ", "_")
+            att = _build_attachment(_raw_resume, f"Resume_{safe}{ext}")
+            if att:
+                attachments.append(att)
+        jd_file_url = _field(jd, "file_url")
+        if jd_file_url:
+            ext = os.path.splitext(jd_file_url)[1] or ".pdf"
+            safe_jd = jd_title.replace(" ", "_")[:40]
+            att = _build_attachment(jd_file_url, f"JD_{safe_jd}{ext}")
+            if att:
+                attachments.append(att)
+
+        return _send_html_email(email, subject, html, attachments=attachments or None)
     except Exception as exc:
         logger.exception("Failed to send additional recipient interview email: %s", exc)
         return False

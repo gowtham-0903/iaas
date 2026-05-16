@@ -8,6 +8,10 @@ export function getInterviews(params) {
   return axiosInstance.get('/api/interviews', { params })
 }
 
+export function getInterviewDetail(id) {
+  return axiosInstance.get(`/api/interviews/${id}`)
+}
+
 export function getPanelistAvailability(params) {
   return axiosInstance.get('/api/interviews/panelist-availability', { params })
 }

@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { getCandidates } from '../api/candidatesApi'
 import { getClients } from '../api/clientsApi'
 import { getInterviews, createInterview, updateInterviewStatus } from '../api/interviewsApi'
 import { getJDs } from '../api/jdApi'
-import { getUsers } from '../api/usersApi'
+import { listPanelists } from '../api/panelistsApi'
+import {
+  fetchTranscriptFromTeams,
+  generateAiScore,
+  getAiScore,
+  getInterviewScores,
+  getTranscriptInfo,
+  uploadInterviewTranscript,
+} from '../api/scoringApi'
 import useAuthStore from '../store/authStore'
 import AppShell from '../components/AppShell'
 import RescheduleCountdownBadge from '../components/RescheduleCountdownBadge'
@@ -365,6 +373,396 @@ function CopyLinkButton({ meetingLink }) {
   )
 }
 
+// ─── Interview Detail Modal ────────────────────────────────────────────────────
+function InterviewDetailModal({ interview, onClose }) {
+  const user = useAuthStore((state) => state.user)
+  const navigate = useNavigate()
+
+  const canFetchTranscript = ['ADMIN', 'M_RECRUITER', 'SR_RECRUITER', 'OPERATOR'].includes(user?.role)
+  const canUploadTranscript = user?.role === 'ADMIN'
+  const canGenerateScore = ['ADMIN', 'M_RECRUITER', 'SR_RECRUITER', 'QC'].includes(user?.role)
+  const canViewAiScore = ['ADMIN', 'M_RECRUITER', 'SR_RECRUITER', 'QC'].includes(user?.role)
+
+  const [transcriptInfo, setTranscriptInfo] = useState(undefined)   // undefined=loading, null=none, obj=exists
+  const [aiScore, setAiScore] = useState(undefined)                  // undefined=loading, null=none, obj=exists
+  const [hasPanelistScores, setHasPanelistScores] = useState(null)   // null=unknown, bool
+
+  const [fetchingTranscript, setFetchingTranscript] = useState(false)
+  const [generatingScore, setGeneratingScore] = useState(false)
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false)
+  const [regeneratePrompt, setRegeneratePrompt] = useState(false)
+
+  const [toasts, setToasts] = useState([])
+
+  function addToast(type, message) {
+    const id = Date.now() + Math.random()
+    setToasts((prev) => [...prev, { id, type, message }])
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000)
+  }
+
+  const isCompleted = interview.status === 'COMPLETED'
+
+  useEffect(() => {
+    if (!isCompleted) return
+
+    async function loadData() {
+      const [transcriptRes, aiRes, scoresRes] = await Promise.allSettled([
+        getTranscriptInfo(interview.id),
+        getAiScore(interview.id),
+        getInterviewScores(interview.id),
+      ])
+
+      setTranscriptInfo(
+        transcriptRes.status === 'fulfilled' ? (transcriptRes.value.data.transcript ?? null) : null
+      )
+      setAiScore(
+        aiRes.status === 'fulfilled' ? (aiRes.value.data.ai_score ?? null) : null
+      )
+      if (scoresRes.status === 'fulfilled') {
+        setHasPanelistScores((scoresRes.value.data.panelists || []).length > 0)
+      }
+    }
+
+    loadData()
+  }, [interview.id, isCompleted])
+
+  async function handleFetchFromTeams() {
+    setFetchingTranscript(true)
+    try {
+      const res = await fetchTranscriptFromTeams(interview.id)
+      if (res.status === 202) {
+        addToast('amber', 'Transcript not yet available. Teams takes 5–10 minutes after meeting ends. Try again shortly.')
+      } else {
+        addToast('green', 'Transcript fetched successfully')
+        const infoRes = await getTranscriptInfo(interview.id)
+        setTranscriptInfo(infoRes.data.transcript ?? null)
+        setTranscriptExpanded(false)
+      }
+    } catch (err) {
+      const msg = err?.response?.data?.error || 'Failed to fetch transcript from Teams'
+      addToast('red', msg)
+    } finally {
+      setFetchingTranscript(false)
+    }
+  }
+
+  async function handleUploadTranscript(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    const formData = new FormData()
+    formData.append('file', file)
+    try {
+      await uploadInterviewTranscript(interview.id, formData)
+      addToast('green', 'Transcript uploaded successfully')
+      const infoRes = await getTranscriptInfo(interview.id)
+      setTranscriptInfo(infoRes.data.transcript ?? null)
+      setTranscriptExpanded(false)
+    } catch (err) {
+      addToast('red', err?.response?.data?.errors?.file?.[0] || err?.response?.data?.error || 'Failed to upload transcript')
+    }
+  }
+
+  async function handleGenerateScore(regenerate = false) {
+    setGeneratingScore(true)
+    setRegeneratePrompt(false)
+    try {
+      const res = await generateAiScore(interview.id, regenerate)
+      setAiScore(res.data.data ?? null)
+      addToast('green', 'AI score generated successfully')
+    } catch (err) {
+      if (err?.response?.status === 409) {
+        setRegeneratePrompt(true)
+      } else {
+        addToast('red', err?.response?.data?.error || 'Failed to generate AI score')
+      }
+    } finally {
+      setGeneratingScore(false)
+    }
+  }
+
+  function aiScoreColor(score) {
+    if (score == null) return 'text-slate-500'
+    if (score >= 80) return 'text-emerald-700'
+    if (score >= 60) return 'text-amber-700'
+    return 'text-red-700'
+  }
+
+  const shortLen = 300
+  const fullPreview = transcriptInfo?.parsed_text_preview || ''
+  const canExpandTranscript = fullPreview.length > shortLen || transcriptInfo?.parsed_text_truncated
+
+  const TOAST_STYLES = {
+    green: 'bg-emerald-50 border-emerald-200 text-emerald-700',
+    amber: 'bg-amber-50 border-amber-200 text-amber-700',
+    red: 'bg-red-50 border-red-200 text-red-700',
+  }
+
+  return (
+    <ModalOverlay onClose={onClose}>
+      <div className="p-6">
+        {/* Header */}
+        <div className="flex items-start justify-between mb-5">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900">{interview.candidate_name || '—'}</h3>
+            <p className="text-sm text-slate-500 mt-0.5">{interview.jd_title || '—'}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="ml-4 flex-shrink-0 text-slate-400 hover:text-slate-600 transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Interview meta */}
+        <div className="grid grid-cols-2 gap-3 bg-slate-50 rounded-xl p-3 mb-5 text-sm">
+          <div>
+            <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">Scheduled</div>
+            <div className="text-slate-800">{formatISTDateTime(interview.scheduled_at_local || interview.scheduled_at)}</div>
+          </div>
+          <div>
+            <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">Status</div>
+            <Badge variant={INTERVIEW_STATUS_VARIANTS[interview.status] || 'gray'}>{interview.status}</Badge>
+          </div>
+          <div>
+            <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">Panelists</div>
+            <div className="text-slate-700">{(interview.panelists || []).map((p) => p.full_name || p.email).join(', ') || '—'}</div>
+          </div>
+          {interview.outcome && (
+            <div>
+              <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">Outcome</div>
+              <Badge variant={OUTCOME_VARIANTS[interview.outcome] || 'gray'}>
+                {interview.outcome === 'SELECTED' ? 'Selected' : 'Not Selected'}
+              </Badge>
+            </div>
+          )}
+        </div>
+
+        {/* Toasts */}
+        {toasts.length > 0 && (
+          <div className="mb-4 space-y-2">
+            {toasts.map((t) => (
+              <div key={t.id} className={`flex items-center gap-2.5 border rounded-xl px-4 py-2.5 text-sm ${TOAST_STYLES[t.type]}`}>
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  {t.type === 'green'
+                    ? <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    : <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  }
+                </svg>
+                <span>{t.message}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── Transcript & AI Scoring — COMPLETED only ── */}
+        {isCompleted && (
+          <div className="border-t border-slate-100 pt-4">
+            <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-3">
+              Transcript &amp; AI Scoring
+            </div>
+
+            {/* Row 1 — Transcript Status */}
+            <div className="flex items-center gap-2 flex-wrap mb-3">
+              <span className="text-xs font-semibold text-slate-600">Transcript:</span>
+              {transcriptInfo === undefined ? (
+                <span className="text-xs text-slate-400">Loading…</span>
+              ) : transcriptInfo === null ? (
+                <Badge variant="gray">No Transcript</Badge>
+              ) : transcriptInfo.source === 'teams_fetch' ? (
+                <>
+                  <Badge variant="blue">Fetched from Teams</Badge>
+                  {transcriptInfo.fetched_at && (
+                    <span className="text-xs text-slate-500">{formatISTDateTime(transcriptInfo.fetched_at)}</span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <Badge variant="blue">Manually Uploaded</Badge>
+                  {transcriptInfo.uploaded_at && (
+                    <span className="text-xs text-slate-500">{formatISTDateTime(transcriptInfo.uploaded_at)}</span>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Row 2 — Action buttons */}
+            <div className="flex items-center gap-2 flex-wrap mb-4">
+              {canFetchTranscript && (
+                <button
+                  type="button"
+                  disabled={fetchingTranscript || (transcriptInfo && transcriptInfo.source === 'teams_fetch') || !interview.teams_meeting_id}
+                  title={
+                    !interview.teams_meeting_id
+                      ? 'No Teams meeting linked'
+                      : transcriptInfo?.source === 'teams_fetch'
+                        ? 'Already fetched. Re-fetch to update.'
+                        : undefined
+                  }
+                  onClick={handleFetchFromTeams}
+                  className="inline-flex items-center gap-1.5 text-sm font-medium px-3.5 py-2 rounded-xl bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {fetchingTranscript
+                    ? <span className="w-3.5 h-3.5 border-2 border-blue-300 border-t-blue-700 rounded-full spin" />
+                    : (
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                      </svg>
+                    )
+                  }
+                  Fetch from Teams
+                </button>
+              )}
+
+              {canUploadTranscript && (
+                <label className="inline-flex items-center gap-1.5 text-sm font-medium px-3.5 py-2 rounded-xl bg-slate-50 text-slate-700 border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                  Upload Transcript
+                  <input type="file" accept=".vtt,.txt,.docx" className="sr-only" onChange={handleUploadTranscript} />
+                </label>
+              )}
+            </div>
+
+            {/* Row 3 — Transcript Preview */}
+            {transcriptInfo && fullPreview && (
+              <div className="mb-4 bg-slate-50 rounded-xl p-3 border border-slate-100">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Preview</span>
+                  {canExpandTranscript && (
+                    <button
+                      type="button"
+                      onClick={() => setTranscriptExpanded((prev) => !prev)}
+                      className="text-xs text-blue-600 hover:underline"
+                    >
+                      {transcriptExpanded ? 'Show less' : 'Show more'}
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-slate-600 font-mono whitespace-pre-wrap break-words leading-relaxed">
+                  {transcriptExpanded ? fullPreview : fullPreview.slice(0, shortLen)}
+                  {!transcriptExpanded && canExpandTranscript && (
+                    <span className="text-slate-400">…</span>
+                  )}
+                  {transcriptExpanded && transcriptInfo.parsed_text_truncated && (
+                    <span className="text-slate-400"> … (transcript continues)</span>
+                  )}
+                </p>
+              </div>
+            )}
+
+            {/* Row 4 — AI Score Generation */}
+            {canGenerateScore && (
+              <div className="mb-4">
+                {!transcriptInfo && (
+                  <p className="text-xs text-amber-600 mb-2 flex items-center gap-1.5">
+                    <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    No transcript — score will be based on panelist ratings only.
+                  </p>
+                )}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    disabled={generatingScore || hasPanelistScores === false}
+                    title={hasPanelistScores === false ? 'No panelist scores submitted yet' : undefined}
+                    onClick={() => handleGenerateScore(false)}
+                    className={`inline-flex items-center gap-2 text-sm font-semibold px-4 py-2.5 rounded-xl transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${
+                      transcriptInfo
+                        ? 'bg-[#02c0fa] hover:bg-[#00a8e0] text-white shadow-[#02c0fa]/20'
+                        : 'bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300 shadow-none'
+                    }`}
+                  >
+                    {generatingScore ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full spin" />
+                        Generating AI analysis…
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                        Generate AI Score
+                      </>
+                    )}
+                  </button>
+
+                  {aiScore && canViewAiScore && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/report?interview_id=${interview.id}`)}
+                      className="inline-flex items-center gap-1.5 text-sm font-medium px-3.5 py-2.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      View Report
+                    </button>
+                  )}
+                </div>
+
+                {/* 409 — regenerate prompt */}
+                {regeneratePrompt && (
+                  <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-4">
+                    <p className="text-sm text-amber-800 mb-3">
+                      A score was already generated on{' '}
+                      <strong>{aiScore?.generated_at ? formatISTDateTime(aiScore.generated_at) : 'a previous date'}</strong>.
+                      Do you want to regenerate?
+                    </p>
+                    <div className="flex gap-2">
+                      <SecondaryBtn onClick={() => setRegeneratePrompt(false)}>Cancel</SecondaryBtn>
+                      <PrimaryBtn loading={generatingScore} onClick={() => handleGenerateScore(true)}>
+                        Regenerate
+                      </PrimaryBtn>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Row 5 — AI Score Status */}
+            {canViewAiScore && aiScore && (
+              <div className="flex items-center gap-4 bg-slate-50 rounded-xl p-3 border border-slate-100">
+                <div>
+                  <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">AI Score</div>
+                  <span className={`text-sm font-bold tabular-nums ${aiScoreColor(aiScore.overall_score)}`}>
+                    {aiScore.overall_score != null ? `${aiScore.overall_score}/100` : '—'}
+                    {aiScore.recommendation ? ` — ${aiScore.recommendation.replace(/_/g, ' ')}` : ''}
+                  </span>
+                </div>
+                <div>
+                  <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">Report</div>
+                  {aiScore.report_distributed ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-emerald-700 font-semibold">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                      Report Distributed
+                    </span>
+                  ) : (
+                    <span className="text-xs text-amber-600 font-semibold">Pending QC Review</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="mt-5 flex justify-end">
+          <SecondaryBtn onClick={onClose}>Close</SecondaryBtn>
+        </div>
+      </div>
+    </ModalOverlay>
+  )
+}
+
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function Interviews() {
   const user = useAuthStore((state) => state.user)
@@ -372,9 +770,10 @@ export default function Interviews() {
   const isRecruiterScopedRole = ['RECRUITER', 'SR_RECRUITER', 'M_RECRUITER'].includes(user?.role)
   const scheduleFormRef = useRef(null)
   const scheduledInterviewsRef = useRef(null)
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const preselectedJdId = searchParams.get('jd_id') || ''
   const preselectedCandidateId = searchParams.get('candidate_id') || ''
+  const isStep2Mode = searchParams.get('step') === '2'
 
   const [clients, setClients] = useState([])
   const [jds, setJDs] = useState([])
@@ -394,6 +793,7 @@ export default function Interviews() {
   // Modal state
   const [outcomeModal, setOutcomeModal] = useState(null)   // interview object
   const [absentModal, setAbsentModal] = useState(null)      // interview object
+  const [detailModal, setDetailModal] = useState(null)      // interview object
   const [isModalSubmitting, setIsModalSubmitting] = useState(false)
   const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now())
 
@@ -433,22 +833,19 @@ export default function Interviews() {
         setError('')
 
         const requests = [getJDs(), getClients(), getInterviews()]
-        if (canSchedule) requests.push(getUsers())
+        if (canSchedule) requests.push(listPanelists())
 
-        const [jdsResponse, clientsResponse, interviewsResponse, usersResponse] = await Promise.all(requests)
+        const [jdsResponse, clientsResponse, interviewsResponse, panelistsResponse] = await Promise.all(requests)
         if (!active) return
 
         const nextJds = jdsResponse.data?.jds || []
         const nextClients = clientsResponse.data?.clients || []
         const nextInterviews = interviewsResponse.data?.interviews || []
-        const nextUsers = Array.isArray(usersResponse?.data)
-          ? usersResponse.data
-          : usersResponse?.data?.users || []
 
         setJDs(nextJds)
         setClients(nextClients)
         setInterviews(nextInterviews)
-        setPanelists(nextUsers.filter((entry) => entry.role === 'PANELIST'))
+        setPanelists(panelistsResponse?.data?.panelists || [])
       } catch (_loadError) {
         if (active) setError('Failed to load interview scheduling data.')
       } finally {
@@ -605,18 +1002,10 @@ export default function Interviews() {
   }
 
   function handleReschedule(interview) {
-    // Pre-fill the scheduling form for this candidate
     const jdId = String(interview.jd_id)
-    setSelectedJdId(jdId)
-    setFormData({
-      ...DEFAULT_FORM,
-      jd_id: jdId,
-      candidate_id: String(interview.candidate_id),
-      candidate_email: interview.candidate_email,
-    })
-    // If on same JD, refresh; otherwise load fresh
-    handleJdSelect(jdId)
-    setTimeout(() => scheduleFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150)
+    const candidateId = String(interview.candidate_id)
+    setSearchParams({ jd_id: jdId, candidate_id: candidateId, step: '2' })
+    // The autoSelect useEffect will handle setting the state and hiding Step 1
   }
 
   async function handleSubmit(event) {
@@ -650,6 +1039,7 @@ export default function Interviews() {
       await Promise.all([refreshInterviews(), handleJdSelect(selectedJdId)])
       setSuccess('Interview scheduled successfully.')
       setFormData((previous) => ({ ...DEFAULT_FORM, jd_id: previous.jd_id }))
+      setSearchParams({}) // Clear step 2 mode and query params so reload doesn't trigger it again
       scheduledInterviewsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     } catch (submitError) {
       setError(
@@ -683,6 +1073,7 @@ export default function Interviews() {
       notes: '',
       additional_emails: [],
     }))
+    setSearchParams({}) // Clear URL params so reload doesn't trigger auto-select again
   }
 
   return (
@@ -704,115 +1095,125 @@ export default function Interviews() {
           isSubmitting={isModalSubmitting}
         />
       )}
+      {detailModal && (
+        <InterviewDetailModal
+          interview={detailModal}
+          onClose={() => setDetailModal(null)}
+        />
+      )}
 
       <AlertBanner type="error" message={error} />
       <AlertBanner type="success" message={success} />
 
       {canSchedule && (
         <>
-          <Card>
-            <CardTitle>Step 1 — Select Job Description</CardTitle>
-            {isLoading ? (
-              <LoadingState label="Loading job descriptions..." />
-            ) : (
-              <FormField label="Job Description" htmlFor="schedule_jd">
-                <SearchSelect
-                  inputId="schedule_jd"
-                  options={jdOptions}
-                  value={selectedJdId}
-                  onChange={(val) => handleJdSelect(val || '')}
-                  placeholder="Search and select a JD..."
-                  isClearable
-                />
-              </FormField>
-            )}
-          </Card>
+          {(!isStep2Mode || !formData.candidate_id) && (
+            <>
+              <Card>
+                <CardTitle>Step 1 — Select Job Description</CardTitle>
+                {isLoading ? (
+                  <LoadingState label="Loading job descriptions..." />
+                ) : (
+                  <FormField label="Job Description" htmlFor="schedule_jd">
+                    <SearchSelect
+                      inputId="schedule_jd"
+                      options={jdOptions}
+                      value={selectedJdId}
+                      onChange={(val) => handleJdSelect(val || '')}
+                      placeholder="Search and select a JD..."
+                      isClearable
+                    />
+                  </FormField>
+                )}
+              </Card>
 
-          {selectedJdId && (
-            <Card>
-              <div className="flex items-center justify-between gap-3 mb-4">
-                <CardTitle>Candidates under this JD</CardTitle>
-                <Badge variant="gray">{jdCandidates.length} total</Badge>
-              </div>
-              {isLoadingJdData ? (
-                <LoadingState label="Loading candidates..." />
-              ) : (
-                <DataTable headers={['Email', 'Name', 'Phone', 'Status', 'Interview Status', 'Action']}>
-                  {jdCandidates.length === 0 ? (
-                    <tr><td colSpan={6}><EmptyState message="No candidates found under this JD" /></td></tr>
+              {selectedJdId && (
+                <Card>
+                  <div className="flex items-center justify-between gap-3 mb-4">
+                    <CardTitle>Candidates under this JD</CardTitle>
+                    <Badge variant="gray">{jdCandidates.length} total</Badge>
+                  </div>
+                  {isLoadingJdData ? (
+                    <LoadingState label="Loading candidates..." />
                   ) : (
-                    jdCandidates.map((candidate) => {
-                      const activeInterview = getActiveInterviewForCandidate(candidate.id)
-                      const lastInterview = getLastInterviewForCandidate(candidate.id)
-                      const canScheduleThis = !activeInterview
-                      const shouldShowReschedule = canScheduleThis && (
-                        candidate.status === 'NOT_SELECTED' ||
-                        lastInterview?.outcome === 'NOT_SELECTED'
-                      )
-                      const rescheduleDaysLeft = shouldShowReschedule
-                        ? getCandidateRescheduleDaysLeft(candidate, lastInterview, currentTimeMs)
-                        : null
+                    <DataTable headers={['Email', 'Name', 'Phone', 'Status', 'Interview Status', 'Action']}>
+                      {jdCandidates.length === 0 ? (
+                        <tr><td colSpan={6}><EmptyState message="No candidates found under this JD" /></td></tr>
+                      ) : (
+                        jdCandidates.map((candidate) => {
+                          const activeInterview = getActiveInterviewForCandidate(candidate.id)
+                          const lastInterview = getLastInterviewForCandidate(candidate.id)
+                          const canScheduleThis = !activeInterview
+                          const shouldShowReschedule = canScheduleThis && (
+                            candidate.status === 'NOT_SELECTED' ||
+                            lastInterview?.outcome === 'NOT_SELECTED'
+                          )
+                          const rescheduleDaysLeft = shouldShowReschedule
+                            ? getCandidateRescheduleDaysLeft(candidate, lastInterview, currentTimeMs)
+                            : null
 
-                      return (
-                        <TableRow key={candidate.id}>
-                          <TableCell className="font-medium">{candidate.email || '—'}</TableCell>
-                          <TableCell>{candidate.full_name || '—'}</TableCell>
-                          <TableCell>{candidate.phone || '—'}</TableCell>
-                          <TableCell>
-                            <Badge variant={CANDIDATE_STATUS_VARIANTS[candidate.status] || 'gray'}>
-                              {candidate.status || 'UNKNOWN'}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            {activeInterview ? (
-                              <div>
-                                <Badge variant="blue">Scheduled</Badge>
-                                <div className="text-xs text-slate-500 mt-1">
-                                  {formatLocalDateTime(activeInterview.scheduled_at_local || activeInterview.scheduled_at, activeInterview.timezone)}
-                                </div>
-                              </div>
-                            ) : lastInterview ? (
-                              <div>
-                                <Badge variant={INTERVIEW_STATUS_VARIANTS[lastInterview.status] || 'gray'}>
-                                  {lastInterview.status}
+                          return (
+                            <TableRow key={candidate.id}>
+                              <TableCell className="font-medium">{candidate.email || '—'}</TableCell>
+                              <TableCell>{candidate.full_name || '—'}</TableCell>
+                              <TableCell>{candidate.phone || '—'}</TableCell>
+                              <TableCell>
+                                <Badge variant={CANDIDATE_STATUS_VARIANTS[candidate.status] || 'gray'}>
+                                  {candidate.status || 'UNKNOWN'}
                                 </Badge>
-                                {lastInterview.outcome && (
-                                  <div className="mt-1">
-                                    <Badge variant={OUTCOME_VARIANTS[lastInterview.outcome] || 'gray'}>
-                                      {lastInterview.outcome === 'SELECTED' ? 'Selected' : 'Not Selected'}
-                                    </Badge>
+                              </TableCell>
+                              <TableCell>
+                                {activeInterview ? (
+                                  <div>
+                                    <Badge variant="blue">Scheduled</Badge>
+                                    <div className="text-xs text-slate-500 mt-1">
+                                      {formatLocalDateTime(activeInterview.scheduled_at_local || activeInterview.scheduled_at, activeInterview.timezone)}
+                                    </div>
                                   </div>
+                                ) : lastInterview ? (
+                                  <div>
+                                    <Badge variant={INTERVIEW_STATUS_VARIANTS[lastInterview.status] || 'gray'}>
+                                      {lastInterview.status}
+                                    </Badge>
+                                    {lastInterview.outcome && (
+                                      <div className="mt-1">
+                                        <Badge variant={OUTCOME_VARIANTS[lastInterview.outcome] || 'gray'}>
+                                          {lastInterview.outcome === 'SELECTED' ? 'Selected' : 'Not Selected'}
+                                        </Badge>
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <Badge variant="gray">Not Scheduled</Badge>
                                 )}
-                              </div>
-                            ) : (
-                              <Badge variant="gray">Not Scheduled</Badge>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            {canScheduleThis ? (
-                              shouldShowReschedule ? (
-                                <RescheduleCountdownBadge
-                                  daysLeft={rescheduleDaysLeft}
-                                  onClick={rescheduleDaysLeft === 0 ? () => selectCandidateForScheduling(candidate) : undefined}
-                                />
-                              ) : (
-                                <PrimaryBtn onClick={() => selectCandidateForScheduling(candidate)}>
-                                  Schedule
-                                </PrimaryBtn>
-                              )
-                            ) : (
-                              <SecondaryBtn onClick={() => scheduledInterviewsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
-                                View
-                              </SecondaryBtn>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      )
-                    })
+                              </TableCell>
+                              <TableCell>
+                                {canScheduleThis ? (
+                                  shouldShowReschedule ? (
+                                    <RescheduleCountdownBadge
+                                      daysLeft={rescheduleDaysLeft}
+                                      onClick={rescheduleDaysLeft === 0 ? () => selectCandidateForScheduling(candidate) : undefined}
+                                    />
+                                  ) : (
+                                    <PrimaryBtn onClick={() => selectCandidateForScheduling(candidate)}>
+                                      Schedule
+                                    </PrimaryBtn>
+                                  )
+                                ) : (
+                                  <SecondaryBtn onClick={() => scheduledInterviewsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+                                    View
+                                  </SecondaryBtn>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })
+                      )}
+                    </DataTable>
                   )}
-                </DataTable>
+                </Card>
               )}
-            </Card>
+            </>
           )}
 
           {formData.candidate_id && (
@@ -898,7 +1299,7 @@ export default function Interviews() {
                 <FormField label={`Panelists (${formData.panelist_ids.length}/3 selected)`} htmlFor="interview_panelists">
                   <SearchSelect
                     inputId="interview_panelists"
-                    options={panelists.map((p) => ({ label: `${p.full_name} — ${p.email}`, value: p.id }))}
+                    options={panelists.map((p) => ({ label: `${p.name} — ${p.email}`, value: p.id }))}
                     value={formData.panelist_ids}
                     onChange={(vals) => setFormData((previous) => ({ ...previous, panelist_ids: vals.slice(0, 3) }))}
                     isMulti
@@ -940,67 +1341,80 @@ export default function Interviews() {
       )}
 
       {/* ─── Interviews Table ─────────────────────────────────────────────── */}
-      <Card>
-        <div ref={scheduledInterviewsRef} />
-        <div className="flex items-center justify-between gap-3 mb-4">
-          <CardTitle>Scheduled Interviews ({filteredInterviews.length})</CardTitle>
-        </div>
-        <DataTable
-          headers={['Candidate', 'JD', 'Date & Time (IST)', 'Mode', 'Panelists', 'Status', 'Actions']}
-          loading={isLoading}
-          loadingLabel="Loading interviews..."
-        >
-          {filteredInterviews.length === 0 && !isLoading ? (
-            <tr><td colSpan={7}><EmptyState message="No interviews found" /></td></tr>
-          ) : (
-            filteredInterviews.map((interview) => (
-              <TableRow key={interview.id}>
-                <TableCell>
-                  <div className="font-medium text-slate-900">{interview.candidate_name || '—'}</div>
-                  <div className="text-xs text-slate-500">{interview.candidate_email || ''}</div>
-                </TableCell>
-                <TableCell>{interview.jd_title || '—'}</TableCell>
-                <TableCell>
-                  {isRecruiterScopedRole && getClientNameForInterview(interview) && (
-                    <div className="text-xs text-slate-500 mb-0.5">{getClientNameForInterview(interview)}</div>
-                  )}
-                  <div className="text-sm">{formatISTDateTime(interview.scheduled_at_local || interview.scheduled_at)}</div>
-                </TableCell>
-                <TableCell className="capitalize">{interview.mode || 'virtual'}</TableCell>
-                <TableCell>
-                  <div className="text-sm">
-                    {(interview.panelists || []).map((p) => p.full_name || p.email).join(', ') || '—'}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-col gap-1">
-                    <Badge variant={INTERVIEW_STATUS_VARIANTS[interview.status] || 'gray'}>
-                      {interview.status || 'UNKNOWN'}
-                    </Badge>
-                    {interview.outcome && (
-                      <Badge variant={OUTCOME_VARIANTS[interview.outcome] || 'gray'}>
-                        {interview.outcome === 'SELECTED' ? 'Selected' : 'Not Selected'}
-                      </Badge>
+      {(!isStep2Mode || !formData.candidate_id) && (
+        <Card>
+          <div ref={scheduledInterviewsRef} />
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <CardTitle>Scheduled Interviews ({filteredInterviews.length})</CardTitle>
+          </div>
+          <DataTable
+            headers={['Candidate', 'JD', 'Date & Time (IST)', 'Mode', 'Panelists', 'Status', 'Actions']}
+            loading={isLoading}
+            loadingLabel="Loading interviews..."
+          >
+            {filteredInterviews.length === 0 && !isLoading ? (
+              <tr><td colSpan={7}><EmptyState message="No interviews found" /></td></tr>
+            ) : (
+              filteredInterviews.map((interview) => (
+                <TableRow key={interview.id}>
+                  <TableCell>
+                    <div className="font-medium text-slate-900">{interview.candidate_name || '—'}</div>
+                    <div className="text-xs text-slate-500">{interview.candidate_email || ''}</div>
+                  </TableCell>
+                  <TableCell>{interview.jd_title || '—'}</TableCell>
+                  <TableCell>
+                    {isRecruiterScopedRole && getClientNameForInterview(interview) && (
+                      <div className="text-xs text-slate-500 mb-0.5">{getClientNameForInterview(interview)}</div>
                     )}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <InterviewActions
-                    interview={interview}
-                    canSchedule={canSchedule}
-                    cancellingId={cancellingId}
-                    currentTimeMs={currentTimeMs}
-                    onCancel={handleCancelInterview}
-                    onMarkOutcome={(iv) => setOutcomeModal(iv)}
-                    onMarkAbsent={(iv) => setAbsentModal(iv)}
-                    onReschedule={handleReschedule}
-                  />
-                </TableCell>
-              </TableRow>
-            ))
-          )}
-        </DataTable>
-      </Card>
+                    <div className="text-sm">{formatISTDateTime(interview.scheduled_at_local || interview.scheduled_at)}</div>
+                  </TableCell>
+                  <TableCell className="capitalize">{interview.mode || 'virtual'}</TableCell>
+                  <TableCell>
+                    <div className="text-sm">
+                      {(interview.panelists || []).map((p) => p.full_name || p.email).join(', ') || '—'}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col gap-1">
+                      <Badge variant={INTERVIEW_STATUS_VARIANTS[interview.status] || 'gray'}>
+                        {interview.status || 'UNKNOWN'}
+                      </Badge>
+                      {interview.outcome && (
+                        <Badge variant={OUTCOME_VARIANTS[interview.outcome] || 'gray'}>
+                          {interview.outcome === 'SELECTED' ? 'Selected' : 'Not Selected'}
+                        </Badge>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <InterviewActions
+                        interview={interview}
+                        canSchedule={canSchedule}
+                        cancellingId={cancellingId}
+                        currentTimeMs={currentTimeMs}
+                        onCancel={handleCancelInterview}
+                        onMarkOutcome={(iv) => setOutcomeModal(iv)}
+                        onMarkAbsent={(iv) => setAbsentModal(iv)}
+                        onReschedule={handleReschedule}
+                      />
+                      {interview.status === 'COMPLETED' && (
+                        <button
+                          type="button"
+                          onClick={() => setDetailModal(interview)}
+                          className="text-xs px-2.5 py-1.5 rounded-lg bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200 font-medium transition-colors whitespace-nowrap"
+                        >
+                          Details
+                        </button>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </DataTable>
+        </Card>
+      )}
     </AppShell>
   )
 }

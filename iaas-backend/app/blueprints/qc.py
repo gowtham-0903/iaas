@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -11,9 +12,11 @@ from app.extensions import db
 from app.middleware import role_required
 from app.models.feedback_validation import FeedbackValidation
 from app.models.user import User, UserRole
+from app.services.report_distributor import distribute_report
 
 
 qc_bp = Blueprint("qc", __name__)
+logger = logging.getLogger(__name__)
 
 ALLOWED_ROLES = (UserRole.QC.value, UserRole.ADMIN.value)
 QC_DASHBOARD_ROLES = (
@@ -92,6 +95,7 @@ def _get_reviewable_interview(interview_id: int):
             c.status AS candidate_status,
             j.id AS jd_id,
             j.title AS jd_title,
+            j.job_code,
             cl.id AS client_id,
             cl.name AS client_name,
             t.id AS transcript_id,
@@ -99,12 +103,16 @@ def _get_reviewable_interview(interview_id: int):
             t.uploaded_at,
             ai.id AS ai_score_id,
             ai.overall_score AS ai_overall_score,
+            ai.primary_match,
+            ai.secondary_match,
             ai.skill_scores AS ai_skill_scores,
             ai.strengths AS ai_strengths,
             ai.concerns AS ai_concerns,
             ai.recommendation AS ai_recommendation,
+            ai.ai_suggestion,
             ai.generated_at,
             ai.report_status,
+            ai.report_distributed,
             fv.id AS validation_id,
             fv.final_recommendation,
             fv.qc_notes,
@@ -117,7 +125,7 @@ def _get_reviewable_interview(interview_id: int):
         JOIN candidates c ON c.id = s.candidate_id
         JOIN job_descriptions j ON j.id = s.jd_id
         JOIN clients cl ON cl.id = c.client_id
-        JOIN interview_transcripts t ON t.interview_id = s.id
+        LEFT JOIN interview_transcripts t ON t.interview_id = s.id
         JOIN ai_interview_scores ai ON ai.interview_id = s.id
         LEFT JOIN feedback_validations fv ON fv.interview_id = s.id
         WHERE s.id = :interview_id
@@ -150,25 +158,69 @@ def _fetch_panelist_scores(interview_id: int) -> List[Dict[str, Any]]:
             """
             SELECT
                 s.panelist_id,
-                u.full_name AS panelist_name,
+                p.name AS panelist_name,
                 s.skill_id,
                 j.skill_name,
                 j.skill_type,
+                s.overall_score,
                 s.technical_score,
                 s.communication_score,
                 s.problem_solving_score,
                 s.comments,
                 s.submitted_at
             FROM interview_scores s
-            JOIN users u ON u.id = s.panelist_id
+            JOIN panelists p ON p.id = s.panelist_id
             JOIN jd_skills j ON j.id = s.skill_id
             WHERE s.interview_id = :interview_id
-            ORDER BY u.full_name, j.skill_name
+            ORDER BY p.name, j.skill_name
             """
         ),
         {"interview_id": interview_id},
     ).mappings().all()
     return [dict(row) for row in rows]
+
+
+def _fetch_panel_feedback(interview_id: int) -> List[Dict[str, Any]]:
+    rows = db.session.execute(
+        sa.text(
+            """
+            SELECT
+                pa.panelist_id,
+                p.name AS panelist_name,
+                pa.overall_comments,
+                pa.recommendation,
+                pa.no_coding_round,
+                pa.coding_score,
+                pa.coding_comments,
+                pa.coding_qa
+            FROM panel_assignments pa
+            JOIN panelists p ON p.id = pa.panelist_id
+            WHERE pa.interview_id = :interview_id
+            ORDER BY p.name
+            """
+        ),
+        {"interview_id": interview_id},
+    ).mappings().all()
+
+    result = []
+    for row in rows:
+        coding_qa = row["coding_qa"]
+        if isinstance(coding_qa, str):
+            try:
+                coding_qa = json.loads(coding_qa)
+            except Exception:
+                coding_qa = None
+        result.append({
+            "panelist_id": row["panelist_id"],
+            "panelist_name": row["panelist_name"],
+            "overall_comments": row["overall_comments"],
+            "recommendation": row["recommendation"],
+            "no_coding_round": bool(row["no_coding_round"]) if row["no_coding_round"] is not None else False,
+            "coding_score": row["coding_score"],
+            "coding_comments": row["coding_comments"],
+            "coding_qa": coding_qa,
+        })
+    return result
 
 
 def _fetch_panelist_count(interview_id: int) -> int:
@@ -202,6 +254,7 @@ def _build_panelist_payload(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "skill_id": row["skill_id"],
                 "skill_name": row["skill_name"],
                 "skill_type": row["skill_type"],
+                "overall_score": row["overall_score"],
                 "technical_score": row["technical_score"],
                 "communication_score": row["communication_score"],
                 "problem_solving_score": row["problem_solving_score"],
@@ -222,23 +275,28 @@ def _build_combined_scores(
     panelist_scores_by_skill: Dict[int, List[float]] = {}
 
     for row in panelist_rows:
-        averaged_panelist_score = _average(
-            [
-                float(row["technical_score"]),
-                float(row["communication_score"]),
-                float(row["problem_solving_score"]),
-            ]
-        )
-        if averaged_panelist_score is not None:
-            panelist_scores_by_skill.setdefault(row["skill_id"], []).append(averaged_panelist_score)
+        if row["technical_score"] is not None:
+            # JWT submission: three sub-scores on 1-10 scale → normalise to 1-5
+            score_1_5 = (float(row["technical_score"]) + float(row["communication_score"]) + float(row["problem_solving_score"])) / 6.0
+        elif row["overall_score"] is not None:
+            # Magic-link feedback: overall_score is already on 1-5 scale
+            score_1_5 = float(row["overall_score"])
+        else:
+            continue
+        panelist_scores_by_skill.setdefault(row["skill_id"], []).append(score_1_5)
+
+    # Build name→id lookup for Phase 2 AI scorer which stores skill_name, not skill_id
+    skill_name_to_id: Dict[str, int] = {s["skill_name"].lower(): s["id"] for s in jd_skills}
 
     ai_scores_by_skill: Dict[int, Dict[str, Any]] = {}
     for item in ai_skill_scores:
         skill_id = item.get("skill_id")
+        if not isinstance(skill_id, int):
+            skill_id = skill_name_to_id.get((item.get("skill_name") or "").lower())
         if isinstance(skill_id, int):
             ai_scores_by_skill[skill_id] = {
                 "score": _to_float(item.get("score")),
-                "reasoning": item.get("reasoning"),
+                "reasoning": item.get("ai_assessment") or item.get("reasoning"),
             }
 
     skills_payload = []
@@ -286,10 +344,12 @@ def _build_review_payload(interview_row: Dict[str, Any]) -> Dict[str, Any]:
     jd_skills = _fetch_jd_skills(interview_row["jd_id"])
     panelist_rows = _fetch_panelist_scores(interview_row["interview_id"])
     panelists = _build_panelist_payload(panelist_rows)
+    panel_feedback = _fetch_panel_feedback(interview_row["interview_id"])
 
     ai_skill_scores = _normalize_json_field(interview_row["ai_skill_scores"], [])
     ai_strengths = _normalize_json_field(interview_row["ai_strengths"], [])
     ai_concerns = _normalize_json_field(interview_row["ai_concerns"], [])
+    ai_suggestion = _normalize_json_field(interview_row["ai_suggestion"], None)
     raw_skill_overrides = _normalize_json_field(interview_row["skill_overrides"], [])
 
     skill_overrides: Dict[int, float] = {}
@@ -302,9 +362,14 @@ def _build_review_payload(interview_row: Dict[str, Any]) -> Dict[str, Any]:
     combined_scores = _build_combined_scores(jd_skills, panelist_rows, ai_skill_scores, skill_overrides)
     current_recommendation = interview_row["final_recommendation"] or interview_row["ai_recommendation"]
 
+    def _iso(val):
+        if val is None:
+            return None
+        return val.isoformat() if hasattr(val, "isoformat") else val
+
     return {
         "interview_id": interview_row["interview_id"],
-        "interview_date": interview_row["scheduled_at"].isoformat() if hasattr(interview_row["scheduled_at"], "isoformat") else interview_row["scheduled_at"] if interview_row["scheduled_at"] else None,
+        "interview_date": _iso(interview_row["scheduled_at"]),
         "candidate": {
             "id": interview_row["candidate_id"],
             "full_name": interview_row["candidate_name"],
@@ -317,18 +382,24 @@ def _build_review_payload(interview_row: Dict[str, Any]) -> Dict[str, Any]:
         "jd": {
             "id": interview_row["jd_id"],
             "title": interview_row["jd_title"],
+            "job_code": interview_row["job_code"],
             "skills": jd_skills,
         },
         "panelist_count": _fetch_panelist_count(interview_row["interview_id"]),
         "panelists": panelists,
+        "panel_feedback": panel_feedback,
         "ai_review": {
             "overall_score": _to_float(interview_row["ai_overall_score"]),
+            "primary_match": _to_float(interview_row["primary_match"]),
+            "secondary_match": _to_float(interview_row["secondary_match"]),
             "recommendation": interview_row["ai_recommendation"],
             "strengths": ai_strengths,
             "concerns": ai_concerns,
             "skill_scores": ai_skill_scores,
-            "generated_at": interview_row["generated_at"].isoformat() if hasattr(interview_row["generated_at"], "isoformat") else interview_row["generated_at"] if interview_row["generated_at"] else None,
+            "ai_suggestion": ai_suggestion,
+            "generated_at": _iso(interview_row["generated_at"]),
             "report_status": interview_row["report_status"],
+            "report_distributed": bool(interview_row["report_distributed"]) if interview_row["report_distributed"] is not None else False,
         },
         "combined_scores": combined_scores,
         "review": {
@@ -339,7 +410,7 @@ def _build_review_payload(interview_row: Dict[str, Any]) -> Dict[str, Any]:
             "current_recommendation": current_recommendation,
             "qc_notes": interview_row["qc_notes"],
             "skill_overrides": raw_skill_overrides if isinstance(raw_skill_overrides, list) else [],
-            "validated_at": interview_row["validated_at"].isoformat() if hasattr(interview_row["validated_at"], "isoformat") else interview_row["validated_at"] if interview_row["validated_at"] else None,
+            "validated_at": _iso(interview_row["validated_at"]),
             "validated_by": interview_row["validated_by"],
         },
     }
@@ -366,10 +437,7 @@ def list_qc_interviews():
         return error
 
     params: Dict[str, Any] = {}
-    filters = [
-        "s.status = 'COMPLETED'",
-        "ai.report_status = 'GENERATED'",
-    ]
+    filters = ["s.status = 'COMPLETED'"]
 
     if recommendation:
         normalized_recommendation = recommendation.strip().upper()
@@ -394,41 +462,67 @@ def list_qc_interviews():
         SELECT
             s.id,
             c.full_name AS candidate_name,
+            c.email AS candidate_email,
             j.title AS jd_title,
+            j.job_code,
             cl.name AS client_name,
             s.scheduled_at,
             ai.recommendation AS ai_recommendation,
+            ai.report_status AS ai_score_status,
+            ai.overall_score,
             COALESCE(fv.status, 'PENDING') AS qc_status,
-            COUNT(DISTINCT pa.panelist_id) AS panelist_count
+            COALESCE(ai.report_distributed, 0) AS report_distributed,
+            COALESCE(fv.approved, 0) AS approved,
+            COUNT(DISTINCT pa.panelist_id) AS panelist_count,
+            COUNT(DISTINCT isc.panelist_id) AS feedback_count,
+            MAX(t.source) AS transcript_source
         FROM interview_schedules s
         JOIN candidates c ON c.id = s.candidate_id
         JOIN job_descriptions j ON j.id = s.jd_id
         JOIN clients cl ON cl.id = c.client_id
-        JOIN interview_transcripts t ON t.interview_id = s.id
-        JOIN ai_interview_scores ai ON ai.interview_id = s.id
+        LEFT JOIN interview_transcripts t ON t.interview_id = s.id
+        LEFT JOIN ai_interview_scores ai ON ai.interview_id = s.id
         LEFT JOIN feedback_validations fv ON fv.interview_id = s.id
         LEFT JOIN panel_assignments pa ON pa.interview_id = s.id
+        LEFT JOIN interview_scores isc ON isc.interview_id = s.id
     """
 
     if filters:
         sql += " WHERE " + " AND ".join(filters)
 
     sql += """
-        GROUP BY s.id, c.full_name, j.title, cl.name, s.scheduled_at, ai.recommendation, fv.status
+        GROUP BY s.id, c.full_name, c.email, j.title, j.job_code, cl.name, s.scheduled_at,
+                 ai.recommendation, ai.report_status, ai.overall_score,
+                 fv.status, ai.report_distributed, fv.approved
         ORDER BY s.scheduled_at DESC, s.id DESC
     """
 
     rows = db.session.execute(sa.text(sql), params).mappings().all()
+
+    def _iso(val):
+        if val is None:
+            return None
+        return val.isoformat() if hasattr(val, "isoformat") else val
+
     interviews = [
         {
             "id": row["id"],
             "candidate_name": row["candidate_name"],
+            "candidate_email": row["candidate_email"],
             "jd_title": row["jd_title"],
+            "job_code": row["job_code"],
             "client_name": row["client_name"],
-            "interview_date": row["scheduled_at"].isoformat() if hasattr(row["scheduled_at"], "isoformat") else row["scheduled_at"] if row["scheduled_at"] else None,
+            "interview_date": _iso(row["scheduled_at"]),
             "panelist_count": int(row["panelist_count"] or 0),
+            "feedback_count": int(row["feedback_count"] or 0),
+            "transcript_source": row["transcript_source"],
+            "transcript_available": row["transcript_source"] is not None,
+            "ai_score_status": row["ai_score_status"],
+            "overall_score": _to_float(row["overall_score"]),
             "ai_recommendation": row["ai_recommendation"],
             "qc_status": row["qc_status"],
+            "approved": bool(row["approved"]),
+            "report_distributed": bool(row["report_distributed"]),
         }
         for row in rows
     ]
@@ -530,6 +624,25 @@ def update_qc_review(interview_id: int):
     )
     db.session.commit()
 
+    # --- Trigger distribution on approval ---------------------------------
+    if approved:
+        try:
+            dist_result = distribute_report(
+                interview_id=interview_id,
+                qc_user_id=current_user.id,
+            )
+            if not dist_result["success"]:
+                logger.warning(
+                    "distribute_report failed for interview %s: %s",
+                    interview_id,
+                    dist_result.get("error"),
+                )
+        except Exception:
+            logger.exception(
+                "distribute_report raised for interview %s — approval still committed",
+                interview_id,
+            )
+
     updated_row = _get_reviewable_interview(interview_id)
     return jsonify(_build_review_payload(updated_row)), 200
 
@@ -540,7 +653,6 @@ def get_qc_dashboard():
     reviewable_filter = """
         s.status = 'COMPLETED'
         AND ai.report_status = 'GENERATED'
-        AND t.id IS NOT NULL
     """
 
     pending_row = db.session.execute(
@@ -548,7 +660,6 @@ def get_qc_dashboard():
             f"""
             SELECT COUNT(DISTINCT s.id) AS pending_reviews
             FROM interview_schedules s
-            JOIN interview_transcripts t ON t.interview_id = s.id
             JOIN ai_interview_scores ai ON ai.interview_id = s.id
             LEFT JOIN feedback_validations fv ON fv.interview_id = s.id
             WHERE {reviewable_filter}
@@ -574,7 +685,6 @@ def get_qc_dashboard():
             f"""
             SELECT AVG(ai.overall_score) AS average_ai_score
             FROM interview_schedules s
-            JOIN interview_transcripts t ON t.interview_id = s.id
             JOIN ai_interview_scores ai ON ai.interview_id = s.id
             WHERE {reviewable_filter}
             """
@@ -588,7 +698,6 @@ def get_qc_dashboard():
                 COALESCE(fv.final_recommendation, ai.recommendation) AS recommendation,
                 COUNT(DISTINCT s.id) AS total
             FROM interview_schedules s
-            JOIN interview_transcripts t ON t.interview_id = s.id
             JOIN ai_interview_scores ai ON ai.interview_id = s.id
             LEFT JOIN feedback_validations fv ON fv.interview_id = s.id
             WHERE {reviewable_filter}
@@ -596,6 +705,26 @@ def get_qc_dashboard():
             """
         )
     ).mappings().all()
+
+    distributed_row = db.session.execute(
+        sa.text(
+            """
+            SELECT COUNT(DISTINCT interview_id) AS distributed_count
+            FROM ai_interview_scores
+            WHERE report_distributed = 1
+            """
+        )
+    ).mappings().first()
+
+    failed_row = db.session.execute(
+        sa.text(
+            """
+            SELECT COUNT(DISTINCT interview_id) AS failed_count
+            FROM ai_interview_scores
+            WHERE report_status = 'FAILED'
+            """
+        )
+    ).mappings().first()
 
     recommendation_counts = {key: 0 for key in VALID_RECOMMENDATIONS}
     for row in recommendation_rows:
@@ -607,7 +736,74 @@ def get_qc_dashboard():
         {
             "pending_reviews": int(pending_row["pending_reviews"] or 0) if pending_row else 0,
             "approved_today": int(approved_today_row["approved_today"] or 0) if approved_today_row else 0,
+            "distributed_count": int(distributed_row["distributed_count"] or 0) if distributed_row else 0,
+            "failed_count": int(failed_row["failed_count"] or 0) if failed_row else 0,
             "average_ai_score": round(_to_float(average_ai_score_row["average_ai_score"]) or 0, 2) if average_ai_score_row else 0,
             "recommendation_counts": recommendation_counts,
         }
     ), 200
+
+
+# ---------------------------------------------------------------------------
+# POST /api/qc/interviews/<id>/distribute  — manual re-send
+# ---------------------------------------------------------------------------
+
+DISTRIBUTE_ROLES = (UserRole.QC.value, UserRole.ADMIN.value)
+
+
+@qc_bp.post("/interviews/<int:interview_id>/distribute")
+@role_required(*DISTRIBUTE_ROLES)
+def manual_distribute(interview_id: int):
+    """Manually (re-)send the approved interview report to the recruiter hierarchy.
+
+    Auth: QC, ADMIN only
+    - 400: feedback_validations.approved is False or no FV record
+    - 404: interview not found
+    - 200: { emails_sent: [...], cc_email: ... }
+    """
+    current_user = _get_current_user()
+    if current_user is None:
+        return jsonify({"message": "User not found"}), 404
+
+    interview_check = db.session.execute(
+        sa.text("SELECT id FROM interview_schedules WHERE id = :iid LIMIT 1"),
+        {"iid": interview_id},
+    ).mappings().first()
+    if interview_check is None:
+        return jsonify({"error": "Interview not found"}), 404
+
+    fv_row = db.session.execute(
+        sa.text(
+            "SELECT approved FROM feedback_validations WHERE interview_id = :iid LIMIT 1"
+        ),
+        {"iid": interview_id},
+    ).mappings().first()
+
+    if fv_row is None or not fv_row["approved"]:
+        return jsonify({
+            "error": "Report can only be distributed after QC approval. "
+                     "Please approve the validation first."
+        }), 400
+
+    try:
+        result = distribute_report(
+            interview_id=interview_id,
+            qc_user_id=current_user.id,
+        )
+    except Exception:
+        logger.exception("manual_distribute: distribute_report raised for interview %s", interview_id)
+        return jsonify({"error": "Internal server error during distribution"}), 500
+
+    if not result["success"]:
+        return jsonify({
+            "message": "Distribution attempted but email delivery failed. Check server logs.",
+            "emails_sent": result.get("emails_sent", []),
+            "cc_email": result.get("cc_email"),
+            "error": result.get("error"),
+        }), 207
+
+    return jsonify({
+        "message": "Report distributed successfully.",
+        "emails_sent": result["emails_sent"],
+        "cc_email": result.get("cc_email"),
+    }), 200

@@ -11,9 +11,12 @@ import Clients from './pages/Clients'
 import FeedbackForm from './pages/FeedbackForm'
 import QCReview from './pages/QCReview'
 import ScoreReport from './pages/ScoreReport'
+import InterviewReport from './pages/InterviewReport'
 import Users from './pages/Users'
 import PanelistSlots from './pages/PanelistSlots'
-import PanelistAssignments from './pages/PanelistAssignments'
+import Panelists from './pages/Panelists'
+import SkillExtraction from './pages/SkillExtraction'
+import CalendarPage from './pages/CalendarPage'
 
 function DashboardEntry() {
   const userRole = useAuthStore((state) => state.user?.role)
@@ -21,14 +24,6 @@ function DashboardEntry() {
     return <Navigate to="/client-dashboard" replace />
   }
   return <Dashboard />
-}
-
-function FeedbackEntry() {
-  const userRole = useAuthStore((state) => state.user?.role)
-  if (userRole === 'PANELIST') {
-    return <Navigate to="/slots" replace />
-  }
-  return <FeedbackForm />
 }
 
 export default function App() {
@@ -42,23 +37,26 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<Login />} />
+        {/* Public route — no auth required */}
+        <Route path="/feedback/:token" element={<FeedbackForm />} />
         <Route element={<ProtectedRoute />}>
           <Route path="/dashboard" element={<DashboardEntry />} />
           <Route path="/client-dashboard" element={<ProtectedRoute allowedRoles={['CLIENT']}><ClientDashboard /></ProtectedRoute>} />
           <Route path="/clients" element={<ProtectedRoute allowedRoles={['ADMIN']}><Clients /></ProtectedRoute>} />
           <Route path="/interviews" element={<Interviews />} />
-          <Route path="/panelist-assignments" element={<ProtectedRoute allowedRoles={['ADMIN', 'OPERATOR']}><PanelistAssignments /></ProtectedRoute>} />
+          <Route path="/panelists" element={<ProtectedRoute allowedRoles={['ADMIN']}><Panelists /></ProtectedRoute>} />
           <Route path="/jd" element={<JDManagement />} />
           <Route path="/candidates" element={<Candidates />} />
-          <Route path="/feedback" element={<FeedbackEntry />} />
           <Route path="/qc" element={<ProtectedRoute allowedRoles={['QC', 'ADMIN']}><QCReview /></ProtectedRoute>} />
           <Route path="/report" element={<ScoreReport />} />
+          <Route path="/report/:interviewId" element={<InterviewReport />} />
           <Route path="/users" element={<Users />} />
           <Route path="/slots" element={<ProtectedRoute allowedRoles={['PANELIST', 'ADMIN']}><PanelistSlots /></ProtectedRoute>} />
+          <Route path="/skill-extraction/:jdId" element={<SkillExtraction />} />
+          <Route path="/calendar" element={<CalendarPage />} />
         </Route>
         <Route path="/jd-management" element={<Navigate to="/jd" replace />} />
         <Route path="/skill-extraction" element={<Navigate to="/jd" replace />} />
-        <Route path="/skill-extraction/:jdId" element={<Navigate to="/jd" replace />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </BrowserRouter>

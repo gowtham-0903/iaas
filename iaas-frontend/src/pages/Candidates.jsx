@@ -23,13 +23,13 @@ import { getJDs } from '../api/jdApi'
 import AppShell from '../components/AppShell'
 import RescheduleCountdownBadge from '../components/RescheduleCountdownBadge'
 import {
-  AlertBanner, Avatar, Badge, Card, CardTitle, DataTable,
+  AlertBanner, Avatar, Badge, Card, CardTitle,
   EmptyState, FormField, FormInput, FormSelect, LoadingState,
-  PrimaryBtn, SearchSelect, SecondaryBtn, TableCell, TableRow,
+  PrimaryBtn, SearchSelect, SecondaryBtn,
 } from '../components/ui'
 import { getRescheduleDaysLeft } from '../utils/rescheduleWindow'
 
-const CANDIDATE_STATUSES = ['APPLIED', 'SHORTLISTED', 'INTERVIEWED', 'SELECTED', 'NOT_SELECTED']
+const CANDIDATE_STATUSES = ['INTERVIEWED', 'SELECTED', 'NOT_SELECTED']
 
 const STATUS_VARIANTS = {
   SELECTED: 'green',
@@ -802,6 +802,8 @@ export default function Candidates() {
     return { tag: 'none', interview: null }
   }
 
+  const candidateTableColumnCount = isRecruiterScopedRole ? 7 : 8
+
   return (
     <AppShell>
       {!isPanelist && (
@@ -1444,235 +1446,266 @@ export default function Candidates() {
 
       {/* Candidates table */}
       <Card>
-        <DataTable
-          headers={isRecruiterScopedRole
-            ? ['Name', 'Email', 'Phone', 'Skills', 'Job Description', 'Status', 'Uploaded At (IST)', 'Actions']
-            : ['Name', 'Email', 'Phone', 'Skills', 'Client', 'Job Description', 'Status', 'Uploaded At (IST)', 'Actions']}
-          loading={isLoading}
-          loadingLabel="Loading candidates..."
-        >
-          {candidates.length === 0 && !isLoading ? (
-            <tr><td colSpan={isRecruiterScopedRole ? 8 : 9}><EmptyState message="No candidates found" /></td></tr>
-          ) : (
-            candidates.map((candidate) => {
-              const ivState = getInterviewState(candidate.id)
-              const totalInterviews = (interviewMap[candidate.id] || []).length
-              const rejectedDaysLeft = ivState.tag === 'rejected'
-                ? getCandidateLockDaysLeft(candidate, ivState.interview, currentTimeMs)
-                : null
-              return (
-              <TableRow key={candidate.id}>
-                <TableCell>
-                  <div className="space-y-1">
-                    <div className="font-medium text-slate-900">{candidate.full_name}</div>
-                    {totalInterviews > 0 && (
-                      <span className="text-[11px] text-slate-400 font-medium">
-                        {totalInterviews} interview{totalInterviews !== 1 ? 's' : ''}
-                      </span>
-                    )}
-                  </div>
-                </TableCell>
-                <TableCell className="text-slate-500">{candidate.email}</TableCell>
-                <TableCell className="text-slate-500">{candidate.phone || '—'}</TableCell>
-                <TableCell>
-                  {candidate.candidate_extracted_skills && candidate.candidate_extracted_skills.length > 0 ? (
-                    <div className="flex flex-wrap gap-2 items-center">
-                      {candidate.candidate_extracted_skills.slice(0, 3).map((skill, idx) => (
-                        <Badge key={idx} variant="gray">{skill}</Badge>
-                      ))}
-                      {candidate.candidate_extracted_skills.length > 3 && (
-                        <span className="text-xs text-slate-400">+{candidate.candidate_extracted_skills.length - 3} more</span>
-                      )}
-                    </div>
-                  ) : (
-                    '—'
+        <div className="overflow-x-auto -mx-5">
+          <div className="min-w-full px-5">
+            <table className="w-full table-auto">
+              <thead className="sticky top-0 z-10 bg-white">
+                <tr className="border-b border-slate-100">
+                  <th className="text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 min-w-[170px]">Name</th>
+                  <th className="text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 min-w-[180px]">Email</th>
+                  <th className="hidden md:table-cell text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 min-w-[120px]">Phone</th>
+                  <th className="hidden lg:table-cell text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 min-w-[160px]">Skills</th>
+                  {!isRecruiterScopedRole && (
+                    <th className="hidden lg:table-cell text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 min-w-[150px]">Client</th>
                   )}
-                </TableCell>
-                {!isRecruiterScopedRole && (
-                  <TableCell>{clientMap.get(candidate.client_id) || `Client #${candidate.client_id}`}</TableCell>
-                )}
-                <TableCell className="max-w-[220px]">
-                  <div className="text-slate-600 whitespace-normal break-words leading-snug">{jdMap.get(candidate.jd_id)?.title || `JD #${candidate.jd_id}`}</div>
-                </TableCell>
-
-                {/* ── Status column: candidate status + interview status ── */}
-                <TableCell>
-                  <div className="space-y-1.5">
-                    {/* Candidate status badge/dropdown */}
-                    {(() => {
-                      const displayStatus = ivState.tag === 'active' ? 'SCHEDULED' : candidate.status
-                      const variant = STATUS_VARIANTS[displayStatus]
-                      const colorClass =
-                        variant === 'green' ? 'border-green-200 text-green-700 bg-green-50' :
-                        variant === 'red' ? 'border-red-200 text-red-700 bg-red-50' :
-                        variant === 'amber' ? 'border-amber-200 text-amber-700 bg-amber-50' :
-                        variant === 'blue' ? 'border-blue-200 text-blue-700 bg-blue-50' :
-                        'border-slate-200 text-slate-700'
-                      return !isPanelist ? (
-                        <select
-                          value={displayStatus}
-                          onChange={(event) => {
-                            // SCHEDULED is a derived display value — ignore if re-selected
-                            if (event.target.value !== 'SCHEDULED') {
-                              handleStatusChange(candidate.id, event.target.value)
-                            }
-                          }}
-                          className={`text-xs border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500 font-semibold transition-colors cursor-pointer ${colorClass}`}
-                        >
-                          {ivState.tag === 'active' && (
-                            <option value="SCHEDULED" disabled>SCHEDULED</option>
-                          )}
-                          {CANDIDATE_STATUSES.map((s) => (
-                            <option key={s} value={s}>{s}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <Badge variant={variant || 'gray'}>{displayStatus}</Badge>
-                      )
-                    })()}
-
-                    {/* Interview status indicator */}
-                    {ivState.tag === 'absent' && (
-                      <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-[11px] font-semibold text-amber-700 whitespace-nowrap">
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        Absent / No-Show
-                      </div>
-                    )}
-                    {ivState.tag === 'selected' && (
-                      <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-[11px] font-semibold text-emerald-700 whitespace-nowrap">
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                        Attended · Selected
-                      </div>
-                    )}
-                    {ivState.tag === 'rejected' && (
-                      <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-50 border border-red-200 text-[11px] font-semibold text-red-700 whitespace-nowrap">
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                        Attended · Not Selected
-                      </div>
-                    )}
-                  </div>
-                </TableCell>
-
-                <TableCell className="text-slate-500 whitespace-nowrap">
-                  {formatDateTimeInIST(candidate.resume_uploaded_at)}
-                </TableCell>
-
-                {/* ── Actions column ── */}
-                <TableCell>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {!isPanelist && (
-                      <>
-                        {/* Schedule / Reschedule / View / Locked — based on interview state */}
-                        {ivState.tag === 'none' && (
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}`)}
-                            className="inline-flex items-center gap-1.5 text-xs bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap"
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                            </svg>
-                            Schedule
-                          </button>
-                        )}
-
-                        {ivState.tag === 'active' && (
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}`)}
-                            className="inline-flex items-center gap-1.5 text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap"
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                            </svg>
-                            View Interview
-                          </button>
-                        )}
-
-                        {ivState.tag === 'absent' && (
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}`)}
-                            className="inline-flex items-center gap-1.5 text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-2.5 py-1.5 rounded-lg font-semibold transition-colors whitespace-nowrap"
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                            </svg>
-                            Reschedule
-                          </button>
-                        )}
-
-                        {ivState.tag === 'selected' && (
-                          <span className="inline-flex items-center gap-1.5 text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1.5 rounded-lg font-semibold whitespace-nowrap">
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
-                            Selected
+                  <th className="text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 min-w-[190px]">Job Description</th>
+                  <th className="text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 min-w-[190px]">Status</th>
+                  <th className="text-left text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest px-3 sm:px-4 lg:px-5 py-3 min-w-[220px]">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {isLoading ? (
+                  <tr>
+                    <td colSpan={candidateTableColumnCount}>
+                      <LoadingState label="Loading candidates..." />
+                    </td>
+                  </tr>
+                ) : candidates.length === 0 ? (
+                  <tr>
+                    <td colSpan={candidateTableColumnCount}>
+                      <EmptyState message="No candidates found" />
+                    </td>
+                  </tr>
+                ) : (
+                  candidates.map((candidate) => {
+                    const ivState = getInterviewState(candidate.id)
+                    const totalInterviews = (interviewMap[candidate.id] || []).length
+                    const rejectedDaysLeft = ivState.tag === 'rejected'
+                      ? getCandidateLockDaysLeft(candidate, ivState.interview, currentTimeMs)
+                      : null
+                    return (
+                      <tr
+                        key={candidate.id}
+                        className="border-b border-slate-50 hover:bg-slate-50/60 transition-colors last:border-0"
+                      >
+                        <td className="px-3 sm:px-4 lg:px-5 py-3.5 pr-5 text-sm text-slate-700 align-top">
+                          <div className="space-y-1">
+                            <div className="font-medium text-slate-900 break-words line-clamp-2" title={candidate.full_name}>
+                              {candidate.full_name}
+                            </div>
+                            {totalInterviews > 0 && (
+                              <span className="text-[11px] text-slate-400 font-medium">
+                                {totalInterviews} interview{totalInterviews !== 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-500 align-top">
+                          <span className="block break-all line-clamp-2" title={candidate.email}>
+                            {candidate.email}
                           </span>
+                        </td>
+                        <td className="hidden md:table-cell px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-500 align-top">
+                          <span className="break-words">{candidate.phone || '—'}</span>
+                        </td>
+                        <td className="hidden lg:table-cell px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-600 align-top">
+                          {candidate.candidate_extracted_skills && candidate.candidate_extracted_skills.length > 0 ? (
+                            <div className="flex flex-wrap gap-2 items-center">
+                              {candidate.candidate_extracted_skills.slice(0, 3).map((skill, idx) => (
+                                <Badge key={idx} variant="gray">{skill}</Badge>
+                              ))}
+                              {candidate.candidate_extracted_skills.length > 3 && (
+                                <span className="text-xs text-slate-400">+{candidate.candidate_extracted_skills.length - 3} more</span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-slate-300">—</span>
+                          )}
+                        </td>
+                        {!isRecruiterScopedRole && (
+                          <td className="hidden lg:table-cell px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-700 align-top">
+                            <span className="block break-words line-clamp-2" title={clientMap.get(candidate.client_id) || `Client #${candidate.client_id}`}>
+                              {clientMap.get(candidate.client_id) || `Client #${candidate.client_id}`}
+                            </span>
+                          </td>
                         )}
+                        <td className="px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-600 align-top">
+                          <div className="leading-snug break-words line-clamp-2" title={jdMap.get(candidate.jd_id)?.title || `JD #${candidate.jd_id}`}>
+                            {jdMap.get(candidate.jd_id)?.title || `JD #${candidate.jd_id}`}
+                          </div>
+                        </td>
+                        <td className="px-3 sm:px-4 lg:px-5 py-3.5 pl-5 text-sm text-slate-700 align-top min-w-[190px]">
+                          <div className="space-y-1.5">
+                            {(() => {
+                              const displayStatus = ivState.tag === 'active' ? 'SCHEDULED' : candidate.status
+                              const variant = STATUS_VARIANTS[displayStatus]
+                              const colorClass =
+                                variant === 'green' ? 'border-green-200 text-green-700 bg-green-50' :
+                                variant === 'red' ? 'border-red-200 text-red-700 bg-red-50' :
+                                variant === 'amber' ? 'border-amber-200 text-amber-700 bg-amber-50' :
+                                variant === 'blue' ? 'border-blue-200 text-blue-700 bg-blue-50' :
+                                'border-slate-200 text-slate-700'
+                              return !isPanelist ? (
+                                <select
+                                  value={displayStatus}
+                                  onChange={(event) => {
+                                    if (event.target.value !== 'SCHEDULED') {
+                                      handleStatusChange(candidate.id, event.target.value)
+                                    }
+                                  }}
+                                  className={`text-xs border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500 font-semibold transition-colors cursor-pointer ${colorClass}`}
+                                >
+                                  {ivState.tag === 'active' && (
+                                    <option value="SCHEDULED" disabled>SCHEDULED</option>
+                                  )}
+                                  {CANDIDATE_STATUSES.map((s) => (
+                                    <option key={s} value={s}>{s}</option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <Badge variant={variant || 'gray'}>{displayStatus}</Badge>
+                              )
+                            })()}
 
-                        {ivState.tag === 'rejected' && (
-                          <RescheduleCountdownBadge
-                            daysLeft={rejectedDaysLeft}
-                            onClick={rejectedDaysLeft === 0 ? () => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}`) : undefined}
-                          />
-                        )}
-                      </>
-                    )}
-                    {candidate.candidate_extracted_skills && candidate.candidate_extracted_skills.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedCandidateForView(candidate)
-                          setShowExtractedModal(true)
-                        }}
-                        className="inline-flex items-center justify-center w-8 h-8 rounded-lg border bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200 transition-colors"
-                        title="View extracted resume data"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                        </svg>
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleDownloadResume(candidate)}
-                      disabled={!candidate.resume_url}
-                      className={`inline-flex items-center justify-center w-8 h-8 rounded-lg border transition-colors ${
-                        candidate.resume_url
-                          ? 'bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200'
-                          : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                      }`}
-                      title={candidate.resume_url ? 'Download Resume' : 'No resume uploaded'}
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v1a3 3 0 003 3h10a3 3 0 003-3v-1" />
-                      </svg>
-                    </button>
-                    {!isPanelist && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteCandidate(candidate.id)}
-                        className="text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </div>
-                </TableCell>
-              </TableRow>
-              )
-            })
-          )}
-        </DataTable>
+                            {ivState.tag === 'absent' && (
+                              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-[11px] font-semibold text-amber-700 whitespace-nowrap">
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                Absent / No-Show
+                              </div>
+                            )}
+                            {ivState.tag === 'selected' && (
+                              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-[11px] font-semibold text-emerald-700 whitespace-nowrap">
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                                Attended · Selected
+                              </div>
+                            )}
+                            {ivState.tag === 'rejected' && (
+                              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-50 border border-red-200 text-[11px] font-semibold text-red-700 whitespace-nowrap">
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                                Attended · Not Selected
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-3 sm:px-4 lg:px-5 py-3.5 text-sm text-slate-700 align-top min-w-[220px]">
+                          <div className="flex flex-col gap-2">
+                            {!isPanelist && (
+                              <div className="flex flex-wrap gap-2">
+                                {ivState.tag === 'none' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}`)}
+                                    className="inline-flex items-center gap-1.5 text-xs bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap"
+                                  >
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                    </svg>
+                                    Schedule
+                                  </button>
+                                )}
+
+                                {ivState.tag === 'active' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}`)}
+                                    className="inline-flex items-center gap-1.5 text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap"
+                                  >
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                    </svg>
+                                    View Interview
+                                  </button>
+                                )}
+
+                                {ivState.tag === 'absent' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}&step=2`)}
+                                    className="inline-flex items-center gap-1.5 text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-2.5 py-1.5 rounded-lg font-semibold transition-colors whitespace-nowrap"
+                                  >
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                    </svg>
+                                    Reschedule
+                                  </button>
+                                )}
+
+                                {ivState.tag === 'selected' && (
+                                  <span className="inline-flex items-center gap-1.5 text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1.5 rounded-lg font-semibold whitespace-nowrap">
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    Selected
+                                  </span>
+                                )}
+
+                                {ivState.tag === 'rejected' && (
+                                  <RescheduleCountdownBadge
+                                    daysLeft={rejectedDaysLeft}
+                                    onClick={rejectedDaysLeft === 0 ? () => navigate(`/interviews?jd_id=${candidate.jd_id}&candidate_id=${candidate.id}&step=2`) : undefined}
+                                  />
+                                )}
+                              </div>
+                            )}
+                            <div className="flex flex-wrap gap-2">
+                              {candidate.candidate_extracted_skills && candidate.candidate_extracted_skills.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedCandidateForView(candidate)
+                                    setShowExtractedModal(true)
+                                  }}
+                                  className="inline-flex items-center justify-center w-8 h-8 rounded-lg border bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200 transition-colors"
+                                  title="View extracted resume data"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                  </svg>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadResume(candidate)}
+                                disabled={!candidate.resume_url}
+                                className={`inline-flex items-center justify-center w-8 h-8 rounded-lg border transition-colors ${
+                                  candidate.resume_url
+                                    ? 'bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200'
+                                    : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                                }`}
+                                title={candidate.resume_url ? 'Download Resume' : 'No resume uploaded'}
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v1a3 3 0 003 3h10a3 3 0 003-3v-1" />
+                                </svg>
+                              </button>
+                              {!isPanelist && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteCandidate(candidate.id)}
+                                  className="text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors"
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </Card>
 
       {/* Extracted Resume Details Modal */}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import * as XLSX from 'xlsx'
@@ -99,6 +100,8 @@ function DownloadIcon() {
 // ── Component ─────────────────────────────────────────────────────────────
 
 export default function JDManagement() {
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const user = useAuthStore((state) => state.user)
   const isAdmin = user?.role === 'ADMIN'
   const isPanelist = user?.role === 'PANELIST'
@@ -146,6 +149,10 @@ export default function JDManagement() {
     if (isRecruiterScopedRole && user?.client_id != null) {
       base = jds.filter((jd) => String(jd.client_id) === String(user.client_id))
     }
+    const clientFilterId = searchParams.get('clientId') || ''
+    if (clientFilterId) {
+      base = base.filter((jd) => String(jd.client_id) === String(clientFilterId))
+    }
     const query = searchQuery.trim().toLowerCase()
     if (!query) return base
     return base.filter((jd) =>
@@ -153,7 +160,7 @@ export default function JDManagement() {
       (jd.job_code && jd.job_code.toLowerCase().includes(query)) ||
       (clientMap.get(jd.client_id) || '').toLowerCase().includes(query)
     )
-  }, [jds, searchQuery, clientMap, isRecruiterScopedRole, user?.client_id])
+  }, [jds, searchQuery, clientMap, isRecruiterScopedRole, user?.client_id, searchParams])
 
   // ── Load base data ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -617,7 +624,7 @@ export default function JDManagement() {
                   <div className="flex items-center gap-1.5 whitespace-nowrap">
                     {!isPanelist && (
                       jd.skills && jd.skills.length > 0 ? (
-                        <button type="button" onClick={() => openSkillsModal(jd.id)}
+                        <button type="button" onClick={() => navigate(`/skill-extraction/${jd.id}`)}
                           className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-1.5 rounded-lg font-medium transition-colors">
                           View Skills ({jd.skills.length})
                         </button>
@@ -632,11 +639,6 @@ export default function JDManagement() {
                         </button>
                       )
                     )}
-                    <button type="button" onClick={() => openSkillsModal(jd.id)}
-                      aria-label="View job description" title="View job description"
-                      className="inline-flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-700 p-2 rounded-lg transition-colors">
-                      <ViewIcon />
-                    </button>
                     <button type="button" onClick={() => handleDownloadFile(jd)}
                       disabled={!jd.file_url}
                       aria-label="Download JD file" title={jd.file_url ? 'Download uploaded JD file' : 'No uploaded file'}
